@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.19-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.22-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,15 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.22</b> - Claude macOS 登录继承</summary>
+
+- **继承 macOS Keychain 登录态**：managed Claude 启动现在会从 macOS Keychain 读取 Claude Code 官方登录凭据，并在隔离 Claude home 内物化等价的项目级 `.claude/.credentials.json`
+- **刷新 Claude 账号元数据**：继承的 `.claude.json` 账号元数据现在会从 source home 刷新，同时保留 managed workspace trust，并排除 source workspace trust 与 API key secret
+- **扩展回归覆盖**：新增测试锁定 Keychain 投影、账号元数据刷新以及关闭 auth 继承后的清理路径
+
+</details>
+
+<details>
 <summary><b>v6.0.21</b> - Claude Hook 资产投影</summary>
 
 - **继承 CodeIsland Hook 资产**：managed Claude 启动现在会在继承的 Claude hooks 调用 `$HOME/.codeisland/...` 时复制源 home 中对应的 `.codeisland/`，避免隔离 Claude home 内缺少 hook 脚本
