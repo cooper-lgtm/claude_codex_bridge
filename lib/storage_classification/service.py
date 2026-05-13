@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 import os
 
 from storage.paths import PathLayout
@@ -104,7 +105,7 @@ def _classify_path(layout: PathLayout, root: Path, path: Path, *, root_kind: str
     size = _safe_size(path)
     relative_path = _relative_display(layout, root, path, root_kind=root_kind)
     symlink_reason = _unsafe_symlink_reason(path, layout)
-    if symlink_reason is not None:
+    if symlink_reason is not None and not _is_marked_projected_symlink(path):
         return StorageEntry(
             path=path,
             relative_path=relative_path,
@@ -219,6 +220,17 @@ def _classify_provider_home(
     name = remainder[-1]
     if name in _SECRET_FILENAMES:
         return _entry(path, relative_path, StorageClass.SECRET, size, provider=provider, agent=agent, reason='provider_secret', root_kind=root_kind)
+    if name.endswith('.ccb-projection.json'):
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.PROJECTED_CONFIG,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='projected_asset_marker',
+            root_kind=root_kind,
+        )
     if provider == 'codex':
         return _classify_codex_home(path, relative_path, remainder, size=size, provider=provider, agent=agent, root_kind=root_kind)
     if provider == 'claude':
@@ -420,6 +432,7 @@ def _summary_payload(layout: PathLayout, entries: list[StorageEntry]) -> dict[st
         if entry.agent:
             _accumulate(by_agent[entry.agent], entry.size_bytes)
     shared_cache_reason = _shared_cache_disabled_reason(layout)
+    shared_cache_enabled = shared_cache_reason is None
     return {
         'schema_version': SCHEMA_VERSION,
         'generated_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
@@ -427,10 +440,10 @@ def _summary_payload(layout: PathLayout, entries: list[StorageEntry]) -> dict[st
         'project_id': layout.project_id,
         'runtime_root_kind': layout.runtime_state_placement.root_kind,
         'runtime_state_root': str(layout.runtime_state_root),
-        'shared_cache_root': _shared_cache_root(layout, disabled_reason=shared_cache_reason),
-        'shared_cache_root_usable': False,
-        'shared_cache_status': 'disabled',
-        'shared_cache_reason': shared_cache_reason,
+        'shared_cache_root': _shared_cache_root(layout, disabled_reason=shared_cache_reason or ''),
+        'shared_cache_root_usable': shared_cache_enabled,
+        'shared_cache_status': 'enabled' if shared_cache_enabled else 'disabled',
+        'shared_cache_reason': 'enabled' if shared_cache_enabled else shared_cache_reason,
         'total_bytes': total_bytes,
         'total_count': len(entries),
         'by_class': dict(sorted(by_class.items())),
@@ -446,13 +459,11 @@ def _shared_cache_root(layout: PathLayout, *, disabled_reason: str) -> str | Non
     return str(layout.shared_cache_dir)
 
 
-def _shared_cache_disabled_reason(layout: PathLayout) -> str:
+def _shared_cache_disabled_reason(layout: PathLayout) -> str | None:
     placement = layout.runtime_state_placement
     if placement.filesystem_hint == 'wsl_drvfs' and placement.root_kind != 'relocated':
         return 'wsl_drvfs_requires_runtime_relocation'
-    if placement.filesystem_hint == 'wsl_drvfs':
-        return 'not_implemented_runtime_relocated'
-    return 'not_implemented'
+    return None
 
 
 def _accumulate(bucket: dict[str, int], size: int) -> None:
@@ -502,6 +513,31 @@ def _unsafe_symlink_reason(path: Path, layout: PathLayout) -> str | None:
     if any(_is_within(target, root) for root in allowed_roots):
         return None
     return 'symlink_out_of_bounds'
+
+
+def _is_marked_projected_symlink(path: Path) -> bool:
+    try:
+        if not path.is_symlink():
+            return False
+        payload = json.loads(Path(f'{path}.ccb-projection.json').read_text(encoding='utf-8'))
+    except Exception:
+        return False
+    if not isinstance(payload, dict) or payload.get('record_type') != 'ccb_projected_asset':
+        return False
+    if str(payload.get('label') or '') not in {
+        'claude-binary-versions',
+        'codex-inherited-skills',
+        'codex-inherited-commands',
+        'codex-plugin-bundle',
+    }:
+        return False
+    source = str(payload.get('source') or '').strip()
+    if not source:
+        return False
+    try:
+        return Path(source).expanduser().resolve() == path.resolve()
+    except Exception:
+        return False
 
 
 def _is_within(path: Path, root: Path) -> bool:

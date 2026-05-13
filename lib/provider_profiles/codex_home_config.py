@@ -10,6 +10,13 @@ from pathlib import Path
 import re
 import shutil
 
+from provider_core.projected_assets import (
+    copy_projected_tree_to_cache,
+    remove_projected_path,
+    route_projected_tree,
+    tree_content_fingerprint,
+    write_projected_marker,
+)
 from provider_core.source_home import current_provider_source_home
 from project_memory import (
     ensure_project_memory,
@@ -19,12 +26,16 @@ from project_memory import (
 )
 from project_memory.hashing import sha256_text
 from storage.atomic import atomic_write_text
+from storage.paths import PathLayout
 
 
 _CODEX_CUSTOM_PROVIDER_ID = 'custom'
 _BARE_TOML_KEY_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 _CODEX_PLUGIN_TREE_RELATIVE = Path('.tmp') / 'plugins'
 _CODEX_PLUGIN_SHA_RELATIVE = Path('.tmp') / 'plugins.sha'
+_CODEX_SKILLS_PROJECTION_LABEL = 'codex-inherited-skills'
+_CODEX_COMMANDS_PROJECTION_LABEL = 'codex-inherited-commands'
+_CODEX_PLUGIN_PROJECTION_LABEL = 'codex-plugin-bundle'
 _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('.agents') / 'plugins' / 'marketplace.json',
     Path('.agents') / 'skills',
@@ -48,6 +59,7 @@ def materialize_codex_home_config(
     project_root: Path | None = None,
     agent_name: str | None = None,
     workspace_path: Path | None = None,
+    shared_cache_root: Path | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
 ) -> Path:
@@ -76,9 +88,24 @@ def materialize_codex_home_config(
         profile=profile,
         authority=authority,
     )
-    _sync_tree(source_home / 'skills', target_home / 'skills', enabled=_inherits_skills(profile))
-    _sync_tree(source_home / 'commands', target_home / 'commands', enabled=_inherits_commands(profile))
-    _sync_codex_plugin_projection(source_home, target_home)
+    _route_inherited_tree(
+        source_home / 'skills',
+        target_home / 'skills',
+        enabled=_inherits_skills(profile),
+        label=_CODEX_SKILLS_PROJECTION_LABEL,
+    )
+    _route_inherited_tree(
+        source_home / 'commands',
+        target_home / 'commands',
+        enabled=_inherits_commands(profile),
+        label=_CODEX_COMMANDS_PROJECTION_LABEL,
+    )
+    _sync_codex_plugin_projection(
+        source_home,
+        target_home,
+        project_root=project_root,
+        shared_cache_root=shared_cache_root,
+    )
     memory_result = _materialize_codex_memory(
         source_home,
         target_home,
@@ -310,29 +337,140 @@ def _sync_tree(source: Path, target: Path, *, enabled: bool) -> None:
         pass
 
 
-def _sync_codex_plugin_projection(source_home: Path, target_home: Path) -> None:
+def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
+    if not enabled:
+        remove_projected_path(target, label=label)
+        return
+    if not source.is_dir():
+        remove_projected_path(target, label=label)
+        return
+    route_projected_tree(source, target, label=label)
+
+
+def _sync_codex_plugin_projection(
+    source_home: Path,
+    target_home: Path,
+    *,
+    project_root: Path | None,
+    shared_cache_root: Path | None,
+) -> None:
     source_tree = source_home / _CODEX_PLUGIN_TREE_RELATIVE
     source_sha = source_home / _CODEX_PLUGIN_SHA_RELATIVE
     target_tree = target_home / _CODEX_PLUGIN_TREE_RELATIVE
     target_sha = target_home / _CODEX_PLUGIN_SHA_RELATIVE
     if not source_tree.is_dir():
-        _remove_path(target_tree)
+        remove_projected_path(target_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL)
         _remove_path(target_sha)
         return
-    if _plugin_projection_is_current(
+    if _same_path(source_tree, target_tree):
+        return
+    bundle_sha = _codex_plugin_bundle_sha(source_tree, source_sha)
+    if not bundle_sha:
+        return
+    bundle_tree = _codex_plugin_shared_bundle_path(
+        project_root,
+        target_home,
+        shared_cache_root=shared_cache_root,
+        bundle_sha=bundle_sha,
+    )
+    if source_sha.is_file() and _plugin_projection_is_current(
         source_tree=source_tree,
         source_sha=source_sha,
         target_tree=target_tree,
         target_sha=target_sha,
     ):
+        if bundle_tree is None:
+            return
+        if _same_path(target_tree, bundle_tree):
+            write_projected_marker(
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                mode='symlink',
+                source=bundle_tree,
+            )
+            return
+    projected = False
+    if bundle_tree is not None and copy_projected_tree_to_cache(source_tree, bundle_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL):
+        remove_projected_path(target_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL, source=source_tree)
+        target_tree.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target_tree.symlink_to(bundle_tree, target_is_directory=True)
+            write_projected_marker(
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                mode='symlink',
+                source=bundle_tree,
+            )
+            projected = True
+        except Exception:
+            projected = route_projected_tree(
+                bundle_tree,
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                allow_unmarked_replace=True,
+            )
+    else:
+        projected = route_projected_tree(
+            source_tree,
+            target_tree,
+            label=_CODEX_PLUGIN_PROJECTION_LABEL,
+            allow_unmarked_replace=True,
+        )
+    if not projected or not _plugin_required_paths_available(source_tree, target_tree):
         return
-    _remove_path(target_tree)
     _remove_path(target_sha)
-    _sync_tree(source_tree, target_tree, enabled=True)
     if source_sha.is_file():
         _sync_file(source_sha, target_sha)
     else:
-        target_sha.unlink(missing_ok=True)
+        target_sha.parent.mkdir(parents=True, exist_ok=True)
+        target_sha.write_text(f'{bundle_sha}\n', encoding='utf-8')
+
+
+def _codex_plugin_bundle_sha(source_tree: Path, source_sha: Path) -> str:
+    if source_sha.is_file():
+        digest = _safe_read_text(source_sha).strip()
+        if digest:
+            return _safe_cache_segment(digest)
+    return tree_content_fingerprint(source_tree)
+
+
+def _safe_cache_segment(value: str) -> str:
+    normalized = re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '').strip()).strip('.-')
+    if normalized:
+        return normalized[:160]
+    return hashlib.sha256(str(value or '').encode('utf-8', errors='ignore')).hexdigest()
+
+
+def _codex_plugin_shared_bundle_path(
+    project_root: Path | None,
+    target_home: Path,
+    *,
+    shared_cache_root: Path | None,
+    bundle_sha: str,
+) -> Path | None:
+    cache_root = _shared_cache_root(project_root, target_home, shared_cache_root=shared_cache_root)
+    if cache_root is None:
+        return None
+    return cache_root / 'codex' / 'plugin-bundles' / bundle_sha
+
+
+def _shared_cache_root(
+    project_root: Path | None,
+    target_home: Path,
+    *,
+    shared_cache_root: Path | None,
+) -> Path | None:
+    if shared_cache_root is not None:
+        return Path(shared_cache_root).expanduser()
+    if project_root is not None:
+        layout = PathLayout(Path(project_root).expanduser())
+        try:
+            layout.ensure_provider_shared_cache_dir('codex')
+        except Exception:
+            return None
+        return layout.shared_cache_dir
+    del target_home
+    return None
 
 
 def _materialize_codex_memory(
@@ -540,6 +678,8 @@ def _plugin_projection_is_current(*, source_tree: Path, source_sha: Path, target
         return False
     if source_sha.is_file():
         return target_sha.is_file() and _safe_read_text(source_sha) == _safe_read_text(target_sha)
+    # Metadata fingerprint is a cheap repair check for legacy projections.
+    # Content-addressed bundle selection uses tree_content_fingerprint instead.
     source_fingerprint = _tree_metadata_fingerprint(source_tree)
     if not source_fingerprint:
         return False

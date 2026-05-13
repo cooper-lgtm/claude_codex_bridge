@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -76,3 +77,29 @@ def _project_runtime_markers(project_root: Path, *, ccb_root: Path) -> tuple[Pat
             if path not in markers:
                 markers.append(path)
     return tuple(markers)
+
+
+def collect_project_authority_pid_candidates(project_root: Path) -> dict[int, list[Path]]:
+    layout = PathLayout(project_root)
+    candidates: dict[int, list[Path]] = {}
+    for path, keys in (
+        (layout.ccbd_lease_path, ('ccbd_pid', 'keeper_pid')),
+        (layout.ccbd_keeper_path, ('keeper_pid',)),
+    ):
+        payload = _load_json_object(path)
+        if payload is None:
+            continue
+        for key in keys:
+            pid = coerce_pid(payload.get(key))
+            if pid is None:
+                continue
+            candidates.setdefault(pid, []).append(path)
+    return candidates
+
+
+def _load_json_object(path: Path) -> dict | None:
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None

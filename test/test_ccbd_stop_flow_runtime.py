@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import collect_project_process_candidates
+from cli.services.kill_runtime.pid_cleanup import collect_project_authority_pid_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import terminate_runtime_pids
 from ccbd.stop_flow_runtime.runtime_records import extra_agent_dir_names
 from runtime_pid_cleanup.termination import terminate_runtime_pids as terminate_runtime_pids_impl
@@ -80,6 +81,46 @@ def test_collect_project_process_candidates_matches_ccb_runtime_cmdline(tmp_path
     assert sorted(candidates) == [101, 202]
     assert candidates[101] == [ccb_root]
     assert candidates[202] == [ccb_root]
+
+
+def test_collect_project_authority_pid_candidates_includes_ccbd_and_keeper_pids(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    ccbd_dir = project_root / '.ccb' / 'ccbd'
+    ccbd_dir.mkdir(parents=True)
+    (ccbd_dir / 'lease.json').write_text(
+        '{"record_type":"ccbd_lease","ccbd_pid":101,"keeper_pid":202}\n',
+        encoding='utf-8',
+    )
+    (ccbd_dir / 'keeper.json').write_text(
+        '{"record_type":"ccbd_keeper","keeper_pid":202}\n',
+        encoding='utf-8',
+    )
+
+    candidates = collect_project_authority_pid_candidates(project_root)
+
+    assert candidates[101] == [ccbd_dir / 'lease.json']
+    assert candidates[202] == [ccbd_dir / 'lease.json', ccbd_dir / 'keeper.json']
+
+
+def test_collect_project_process_candidates_does_not_include_authority_pids(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    ccbd_dir = project_root / '.ccb' / 'ccbd'
+    proc_root = tmp_path / 'proc'
+    ccbd_dir.mkdir(parents=True)
+    proc_root.mkdir()
+    (ccbd_dir / 'lease.json').write_text(
+        '{"record_type":"ccbd_lease","ccbd_pid":101,"keeper_pid":202}\n',
+        encoding='utf-8',
+    )
+
+    candidates = collect_project_process_candidates(
+        project_root,
+        proc_root=proc_root,
+        read_proc_cmdline_fn=lambda pid: '',
+        current_pid=999999,
+    )
+
+    assert candidates == {}
 
 
 def test_terminate_runtime_pids_includes_project_process_scan(tmp_path: Path, monkeypatch) -> None:

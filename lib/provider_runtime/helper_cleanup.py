@@ -5,6 +5,7 @@ import signal
 import time
 
 from agents.models import AgentState
+from cli.kill_runtime.processes import is_pid_alive as _shared_is_pid_alive
 
 from .helper_manifest import clear_helper_manifest, load_helper_manifest
 
@@ -113,17 +114,7 @@ def _terminate_pid_tree(pid: int) -> bool:
 
 
 def _is_pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return _shared_is_pid_alive(pid)
 
 
 def _safe_getpgrp() -> int | None:

@@ -104,13 +104,14 @@ private home.
 Preferred target:
 
 ```text
-.ccb/
-  shared-cache/
-    claude/
-      bin/
-        claude -> ../versions/<current-version>
-      versions/
-        <version>
+~/.cache/ccb/projects/<project-id-prefix>/provider-cache/
+  claude/
+    versions/
+      <version>
+
+.ccb/agents/<agent>/provider-state/claude/home/
+  .local/share/claude/versions -> ~/.cache/ccb/.../claude/versions
+  .local/bin/claude -> ../share/claude/versions/<current-version>/claude
 ```
 
 or, if CCB can safely rely on the user installation:
@@ -158,7 +159,6 @@ Add conservative pruning for per-agent Claude version caches.
 Policy:
 
 - never delete the current `.local/bin/claude` symlink target
-- keep at most one newest non-current version as rollback cushion
 - delete older versions only when they are regular files under the managed
   Claude home
 - skip pruning if the symlink target cannot be resolved safely
@@ -187,7 +187,8 @@ Approach:
 
 1. Resolve the real account source Claude executable using the source home or
    `PATH`.
-2. Create a CCB shared Claude binary cache under `.ccb/shared-cache/claude/`.
+2. Create a CCB project-scoped user cache under
+   `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/`.
 3. In each managed Claude home, ensure `.local/bin/claude` points to the shared
    cache executable or force the launch command to use the shared executable
    path directly.
@@ -258,7 +259,7 @@ Required unit tests:
 
 - detects current Claude version symlink target
 - classifies current vs. old version files
-- prune keeps current version and one rollback version
+- prune keeps only versions currently referenced by managed Claude homes
 - prune refuses unsafe symlink targets
 - shared-cache launch still writes `HOME=<managed-home>`
 - shared-cache launch does not share `.claude/projects`
@@ -301,18 +302,34 @@ Implemented:
   launch boundary; managed launches keep `HOME` under
   `.ccb/agents/<agent>/provider-state/claude/home`.
 - `ccb cleanup` prunes old per-agent Claude version caches while keeping the
-  current symlink target and one rollback version.
+  current symlink target.
 - `ccb cleanup` reports symlinked `versions/` directories instead of silently
   ignoring them.
 - Managed Claude startup preparation records a de-duplicated
   `claude_binary_cache_drift` agent event when a per-agent `versions/` cache
   appears, so diagnostics can explain why provider-state is growing again.
+- Managed Claude startup preparation now routes
+  `.local/share/claude/versions` to
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/versions`.
+  Existing per-agent version directories, and legacy symlinks that pointed at
+  `.ccb/shared-cache/claude/versions`, are copied into the external cache and
+  replaced with a marked symlink when every entry is a recognizable Claude
+  version cache. Unknown entries are left untouched and continue to emit the
+  drift event.
+- `ccb cleanup` prunes the external Claude `versions/` cache, legacy
+  `.ccb/shared-cache/claude/versions`, and legacy per-agent `versions/`
+  directories. A shared cache keeps only versions referenced by managed homes
+  that actually point at that cache; unreferenced legacy shared caches are
+  removed after external-cache migration.
+- `ccb cleanup` removes rebuildable Claude cache residue from managed homes:
+  `.cache/claude`, `.npm/_logs`, `.claude/cache`, `.claude/telemetry`,
+  `.claude/paste-cache`, and `.claude/plugins/marketplaces`.
 
 Not implemented yet:
 
-- Shared binary cache under `.ccb/shared-cache/claude/`.
 - Active startup guard that redirects or removes future per-agent binary-cache
-  drift once shared cache is enabled.
+  drift after Claude recreates an unrecognized local versions directory.
 
-The next Claude-specific step is shared binary-cache evaluation after Linux,
-macOS, and WSL cleanup validation.
+The next Claude-specific step is real launch validation on Linux, macOS, and
+WSL to confirm Claude Code continues to update through the symlinked
+`versions/` directory.

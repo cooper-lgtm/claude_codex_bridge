@@ -177,8 +177,11 @@ for active tool versions.
 
 ### 3.6 Projected Config And Inherited Assets
 
-Projected config is copied or synthesized into managed homes to make isolated
-provider startup work.
+Projected config is copied, synthesized, or routed into managed homes to make
+isolated provider startup work. Immutable inherited assets may use a symlink
+or a content-addressed shared-cache route when the target is confirmed to be a
+CCB-managed projection. If symlinks are unavailable, startup may fall back to a
+marked copy.
 
 Examples:
 
@@ -190,6 +193,9 @@ Examples:
 
 Auth, OAuth, token, and credential files are never `PROJECTED_CONFIG` even when
 they were created by a projection step. They must classify as `SECRET`.
+Provider sessions, auth, memory files, provider-runtime FIFO/completion
+artifacts, `.claude/projects/`, and `.gemini/tmp/` must not be routed through
+shared-cache.
 
 ### 3.7 Secret
 
@@ -536,25 +542,26 @@ Must remain agent-isolated:
 - explicit provider authority marker
 - `.ccb-session-namespace.json`
 - project-scoped `.codex-<agent>-session`
-- `.tmp/plugins/` plus `.tmp/plugins.sha` as one startup authority bundle
+- `.tmp/plugins.sha` as the managed-home startup authority marker
 
 Must remain secret and agent-local:
 
 - `auth.json`
 
-Potential future shared storage:
+May route through projected assets or shared-cache:
 
-- inherited skills/commands projection when it can be represented as immutable
-  or versioned projection rather than copied tree
-- `.tmp/plugins/` plus `.tmp/plugins.sha` only through content-addressed
-  whole-bundle storage and atomic replacement
+- inherited `skills/` and `commands/`; startup should prefer symlinks to the
+  source home and fall back to marked copies
+- `.tmp/plugins/`; the real bundle may live under
+  `.ccb/shared-cache/codex/plugin-bundles/<sha>/`, with managed homes pointing
+  at that bundle and retaining their local `.tmp/plugins.sha`
 
 Do not share:
 
 - active sessions
 - provider authority markers
 - auth files
-- plugin tree and sha as separately mutable paths
+- `.tmp/plugins.sha`
 - per-agent conversation logs
 
 ### 6.2 Claude
@@ -574,8 +581,12 @@ Must remain secret and agent-local:
 
 Candidates for shared/rebuildable cache:
 
-- `.local/share/claude/versions/`
+- `.local/share/claude/versions/` routed to
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/claude/versions`
 - `.local/bin/claude` shim/symlink
+- rebuildable Claude residue under `.cache/claude`, `.npm/_logs`,
+  `.claude/cache`, `.claude/telemetry`, `.claude/paste-cache`, and
+  `.claude/plugins/marketplaces`
 
 The Claude-specific implementation details live in
 [docs/claude-binary-cache-dedup-plan.md](/home/bfly/yunwei/ccb_source/docs/claude-binary-cache-dedup-plan.md).
@@ -598,12 +609,13 @@ Must remain secret and agent-local:
 
 Candidates for shared/rebuildable cache:
 
-- `.npm/_cacache`
-- `.cache/node-gyp`
-- `.cache/vscode-ripgrep`
+- `NPM_CONFIG_CACHE` and `npm_config_cache` routed to
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/npm`
+- `XDG_CACHE_HOME` routed to
+  `~/.cache/ccb/projects/<project-id-prefix>/provider-cache/gemini/xdg`
 
-Do not redirect cache until real launch tests confirm Gemini respects cache env
-without changing auth/session identity.
+These routes must not change `HOME`, `GEMINI_CLI_HOME`, `GEMINI_ROOT`, auth, or
+session identity.
 
 ## 7. WSL And macOS Requirements
 
@@ -823,8 +835,12 @@ Implemented:
   before startup as well.
 - `ccb cleanup` is implemented as the single cleanup entrypoint. It refuses to
   run while `ccbd` is active or ask jobs are pending/running, prunes old Claude
-  version caches while keeping current plus one rollback version, and removes
-  Gemini rebuildable npm/node-gyp/ripgrep caches.
+  version caches while keeping versions currently referenced by managed homes,
+  removes unreferenced legacy Claude shared-cache versions after external-cache
+  migration,
+  removes rebuildable Claude residue, removes Gemini rebuildable
+  npm/node-gyp/ripgrep caches, and trims stale `pane-crash-*.log` runtime
+  residue.
 - `ccb cleanup` holds the project `startup.lock` while re-checking backend/job
   state and pruning; malformed job JSONL blocks cleanup conservatively.
 - cleanup reports symlinked Claude `versions/` directories and skips
@@ -835,9 +851,8 @@ Implemented:
 - diagnostics bundle provider-state walking does not follow symlinks and
   hard-excludes Codex plugin bundles, Claude version caches, and Gemini/npm
   rebuildable caches even if storage classification fails.
-- storage diagnostics include explicit shared-cache disabled status/reason so
-  users do not mistake Phase C cache cleanup for Phase D shared-cache
-  redirection.
+- storage diagnostics include explicit shared-cache disabled status/reason for
+  providers that still use the project-scoped shared-cache path.
 - Linux real validation passed with the current Phase A-C implementation:
   - full unit suite: `1747 passed`
   - communication matrix: `test/system_comm_matrix.sh` passed, covering mixed
@@ -852,7 +867,7 @@ Implemented:
   - real cleanup validation on the soak project passed after injecting Claude
     and Gemini cache residue: no pending jobs remained, `ccb cleanup` removed
     old Claude version cache plus Gemini npm/node-gyp caches while preserving
-    Claude current/rollback versions and Gemini `.gemini/tmp` session state
+    Claude current versions and Gemini `.gemini/tmp` session state
 - During Linux cleanup validation, an accepted reply-delivery residue was found
   from shutdown-time after-complete scheduling. The shutdown contract now
   suspends automatic reply-delivery creation once project stop is requested, so
@@ -863,7 +878,7 @@ Implemented:
   `ccb doctor storage --json` plus `ccb cleanup` smoke steps. Those steps
   inject Claude version-cache and Gemini npm/node-gyp cache residue through the
   effective `PathLayout`, then assert cleanup removes only rebuildable cache and
-  preserves Claude current/rollback binaries plus Gemini `.gemini/tmp` session
+  preserves Claude current binaries plus Gemini `.gemini/tmp` session
   state. WSL also accepts either pre-relocation or relocated shared-cache
   disabled reasons.
 - Remote macOS and WSL validation passed on GitHub Actions run
@@ -878,8 +893,6 @@ Implemented:
 
 Not implemented yet:
 
-- Claude shared binary cache, Gemini cache redirection, and Codex
-  content-addressed startup-bundle sharing.
 - JSONL retention and compaction.
 
 Next recommended work:

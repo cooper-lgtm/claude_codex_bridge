@@ -580,6 +580,9 @@ That means:
 - once shutdown intent is acquired, the backend must not run any further reconcile/heartbeat tick that could remount desired agents during the same shutdown transaction
 - once shutdown intent is acquired, new mutating RPC requests such as `submit`, `start`, `restore`, `retry`, or `attach` must be rejected with a stable lifecycle-level stopping error; clients must not surface raw socket reset errors as the user-visible contract
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
+- CLI remote-stop shutdown helpers must not treat lifecycle `phase=unmounted` alone as terminal; after a successful `stop_all` response they must also wait for the recorded `ccbd` and project `keeper` pids to exit, and terminate lingering control-plane pids with the same bounded pid-tree cleanup used by the local shutdown path
+- orphan process collection must include structured control-plane pid authority from `.ccb/ccbd/lease.json` and `.ccb/ccbd/keeper.json`; `/proc` command-line matching is only a fallback evidence source and must not be the only way to find ccbd/keeper residue
+- process liveness checks used by shutdown cleanup must treat Linux zombie (`Z`) processes as already dead; uninterruptible (`D`) processes remain alive evidence and may survive until the kernel releases them
 - lease writes that transition backend authority to `unmounted` must be holder-safe:
   - daemon-local shutdown paths may only unmount the lease they still own
   - CLI or keeper cleanup paths acting on an inspected lease must not overwrite a newer holder that took over after inspection

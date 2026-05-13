@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+import cli.kill_runtime.processes as processes
 import cli.kill_runtime.zombies as zombies
+
+
+def test_is_pid_alive_treats_procfs_zombie_as_dead(monkeypatch) -> None:
+    monkeypatch.setattr(processes.os, 'kill', lambda pid, sig: None)
+    monkeypatch.setattr(processes, '_proc_pid_state', lambda pid: 'Z')
+
+    assert processes.is_pid_alive(123) is False
+
+
+def test_is_pid_alive_keeps_uninterruptible_process_alive(monkeypatch) -> None:
+    monkeypatch.setattr(processes.os, 'kill', lambda pid, sig: None)
+    monkeypatch.setattr(processes, '_proc_pid_state', lambda pid: 'D')
+
+    assert processes.is_pid_alive(123) is True
 
 
 def test_find_all_zombie_sessions_filters_dead_parents() -> None:

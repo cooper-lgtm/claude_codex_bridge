@@ -16,14 +16,27 @@ class KillPreparation:
     extra_agent_names: tuple[str, ...]
     tmux_sockets: tuple[str | None, ...]
     pid_candidates: dict[int, list[Path]]
+    control_plane_pids: tuple[int, ...] = ()
 
 
-def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates_fn) -> KillPreparation:
+def prepare_local_shutdown(
+    context,
+    *,
+    force: bool,
+    collect_agent_pid_candidates_fn,
+    collect_project_authority_pid_candidates_fn=None,
+) -> KillPreparation:
     store = AgentRuntimeStore(context.paths)
     tmux_sockets = collect_candidate_tmux_sockets()
     configured_agent_names = _configured_agent_names(context)
     extra_agent_names = extra_agent_dir_names(context, configured_agent_names)
     pid_candidates: dict[int, list[Path]] = {}
+    control_plane_pids: tuple[int, ...] = ()
+    if collect_project_authority_pid_candidates_fn is not None:
+        authority_candidates = collect_project_authority_pid_candidates_fn(context.project.project_root)
+        control_plane_pids = tuple(sorted(authority_candidates))
+        for pid, sources in authority_candidates.items():
+            pid_candidates.setdefault(pid, []).extend(sources)
     for agent_name in (*configured_agent_names, *extra_agent_names):
         runtime = store.load_best_effort(agent_name)
         _capture_runtime_tmux_socket(tmux_sockets, runtime)
@@ -41,6 +54,7 @@ def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates
         extra_agent_names=extra_agent_names,
         tmux_sockets=tuple(tmux_sockets or {None}),
         pid_candidates=pid_candidates,
+        control_plane_pids=control_plane_pids,
     )
 
 

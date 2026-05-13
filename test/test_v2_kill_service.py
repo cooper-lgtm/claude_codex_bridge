@@ -11,6 +11,7 @@ from ccbd.lifecycle_report_store import CcbdShutdownReportStore
 from ccbd.models import LeaseHealth
 from ccbd.services.start_policy import CcbdStartPolicy, CcbdStartPolicyStore
 from cli.context import CliContextBuilder
+from cli.services.kill_runtime.remote import await_remote_shutdown
 import cli.services.daemon as daemon_service
 from cli.services.daemon import CcbdServiceError
 from cli.models import ParsedKillCommand
@@ -47,6 +48,119 @@ def _git_worktree_spec() -> AgentSpec:
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         branch_template=None,
     )
+
+
+def test_await_remote_shutdown_waits_for_ccbd_and_keeper_exit(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-remote-waits-pids'
+    project_root.mkdir(parents=True, exist_ok=True)
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(
+        ParsedKillCommand(project=None, force=False),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+    lease = SimpleNamespace(
+        mount_state=SimpleNamespace(value='unmounted'),
+        ccbd_pid=321,
+        keeper_pid=654,
+    )
+    inspections: list[object] = []
+
+    def _inspect(_context):
+        inspections.append(object())
+        return (
+            None,
+            None,
+            SimpleNamespace(
+                socket_connectable=False,
+                health=LeaseHealth.UNMOUNTED,
+                lease=lease,
+            ),
+        )
+
+    alive = {321, 654}
+    terminated: list[int] = []
+
+    def _terminate(pid, *, timeout_s, is_pid_alive_fn):
+        del timeout_s
+        del is_pid_alive_fn
+        terminated.append(pid)
+        alive.discard(pid)
+        return True
+
+    summary = await_remote_shutdown(
+        context,
+        force=False,
+        inspect_daemon_fn=_inspect,
+        lease_health_cls=LeaseHealth,
+        kill_summary_cls=KillSummary,
+        timeout_s=0.01,
+        lease_pid_fn=lambda lease: lease.ccbd_pid,
+        keeper_pid_fn=lambda context, lease: lease.keeper_pid,
+        wait_for_pid_exit_fn=lambda pid, timeout_s: False,
+        wait_for_keeper_exit_fn=lambda context, timeout_s: False,
+        is_pid_alive_fn=lambda pid: pid in alive,
+        terminate_pid_tree_fn=_terminate,
+        shutdown_timeout_s=0.01,
+    )
+
+    assert summary.state == 'unmounted'
+    assert len(inspections) >= 2
+    assert terminated == [321, 654]
+
+
+def test_await_remote_shutdown_uses_prepared_pids_instead_of_new_lease(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-remote-prepared-pids'
+    project_root.mkdir(parents=True, exist_ok=True)
+    bootstrap_project(project_root)
+    context = CliContextBuilder().build(
+        ParsedKillCommand(project=None, force=False),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+    new_lease = SimpleNamespace(
+        mount_state=SimpleNamespace(value='unmounted'),
+        ccbd_pid=9001,
+        keeper_pid=9002,
+    )
+    alive = {111, 222, 9001, 9002}
+    terminated: list[int] = []
+
+    def _terminate(pid, *, timeout_s, is_pid_alive_fn):
+        del timeout_s
+        del is_pid_alive_fn
+        terminated.append(pid)
+        alive.discard(pid)
+        return True
+
+    await_remote_shutdown(
+        context,
+        force=False,
+        inspect_daemon_fn=lambda _context: (
+            None,
+            None,
+            SimpleNamespace(
+                socket_connectable=False,
+                health=LeaseHealth.UNMOUNTED,
+                lease=new_lease,
+            ),
+        ),
+        lease_health_cls=LeaseHealth,
+        kill_summary_cls=KillSummary,
+        timeout_s=0.01,
+        expected_pids=(111, 222),
+        lease_pid_fn=lambda lease: lease.ccbd_pid,
+        keeper_pid_fn=lambda context, lease: lease.keeper_pid,
+        wait_for_pid_exit_fn=lambda pid, timeout_s: False,
+        wait_for_keeper_exit_fn=lambda context, timeout_s: False,
+        is_pid_alive_fn=lambda pid: pid in alive,
+        terminate_pid_tree_fn=_terminate,
+        shutdown_timeout_s=0.01,
+    )
+
+    assert terminated == [111, 222]
+    assert 9001 in alive
+    assert 9002 in alive
 
 
 def test_kill_project_returns_tmux_cleanup_summary(tmp_path: Path, monkeypatch) -> None:

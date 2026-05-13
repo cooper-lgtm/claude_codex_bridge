@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 
 from project.ids import compute_project_id, project_slug
@@ -35,6 +36,7 @@ from .paths_ccbd import (
 from .paths_targets import TargetPathMixin
 
 _SHARED_CACHE_PROVIDERS = frozenset({'claude', 'codex', 'gemini'})
+_EXTERNAL_CACHE_PROVIDERS = frozenset({'claude', 'gemini'})
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,37 @@ class PathLayout(
                     'provider': cache_dir.name,
                     'project_id': self.project_id,
                     'runtime_state_root': str(self.runtime_state_root),
+                    'created_at': timestamp,
+                    'entries': [],
+                },
+            )
+        return cache_dir
+
+    @property
+    def external_provider_cache_root(self) -> Path:
+        return _user_cache_home() / 'ccb' / 'projects' / self.project_id[:16] / 'provider-cache'
+
+    def provider_external_cache_dir(self, provider: str) -> Path:
+        normalized = normalized_segment(provider, label='provider')
+        if normalized != str(provider or '').strip().lower() or normalized not in _EXTERNAL_CACHE_PROVIDERS:
+            supported = ', '.join(sorted(_EXTERNAL_CACHE_PROVIDERS))
+            raise ValueError(f'provider must be one of: {supported}')
+        return self.external_provider_cache_root / normalized
+
+    def ensure_provider_external_cache_dir(self, provider: str, *, created_at: str | None = None) -> Path:
+        cache_dir = self.provider_external_cache_dir(provider)
+        timestamp = created_at or _utc_now()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = cache_dir / 'MANIFEST.json'
+        if not manifest_path.exists():
+            atomic_write_json(
+                manifest_path,
+                {
+                    'schema_version': 1,
+                    'record_type': 'ccb_external_provider_cache_manifest',
+                    'provider': cache_dir.name,
+                    'project_id': self.project_id,
+                    'project_root': str(self.project_root),
                     'created_at': timestamp,
                     'entries': [],
                 },
@@ -259,6 +292,13 @@ def _validate_expected_fields(payload: dict[str, object], expected: dict[str, st
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _user_cache_home() -> Path:
+    raw = str(os.environ.get('XDG_CACHE_HOME') or '').strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / '.cache'
 
 
 __all__ = ['PathLayout']

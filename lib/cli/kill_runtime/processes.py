@@ -5,6 +5,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 
 def kill_pid(pid: int, *, force: bool = False) -> bool:
@@ -34,6 +35,8 @@ def is_pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     except OSError:
+        return False
+    if _proc_pid_state(pid) == "Z":
         return False
     return True
 
@@ -126,6 +129,27 @@ def _safe_getpgrp() -> int | None:
         return os.getpgrp()
     except Exception:
         return None
+
+
+def _proc_pid_state(pid: int, *, proc_root: Path = Path("/proc")) -> str | None:
+    if os.name == "nt" or pid <= 0:
+        return None
+    try:
+        return _parse_proc_stat_state((proc_root / str(pid) / "stat").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _parse_proc_stat_state(text: str) -> str | None:
+    try:
+        after_comm = text.rsplit(") ", 1)[1]
+    except Exception:
+        return None
+    fields = after_comm.split()
+    if not fields:
+        return None
+    state = fields[0].strip()
+    return state[:1] or None
 
 
 __all__ = ["is_pid_alive", "kill_pid", "terminate_pid_tree"]

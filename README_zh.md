@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.1.8-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.1.9-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -74,9 +74,9 @@
 <details>
 <summary><b>最新版本亮点</b></summary>
 
-- **macOS Claude 登录更稳定**：managed Claude home 现在会继承 Claude 登录查找所需的 macOS 默认 Keychain preference。
-- **认证隔离保持不变**：Keychain preference 只在 Darwin 上投影，并会在关闭 Claude auth 继承时删除。
-- **Codex 共享记忆刷新仍保持修复**：`.ccb/ccb_memory.md` 变化后，managed Codex 会避开旧 `resume` 上下文。
+- **Provider 存储更轻**：Codex、Claude、Gemini 会共享或清理可重建资产，不再在每个 managed home 里重复堆积。
+- **项目关闭更彻底**：`ccb kill` 会等待旧 `ccbd` 和 keeper pid 真正退出，并避免误杀新的 backend generation。
+- **Claude tmux 启动更稳定**：auto-permission Claude pane 会跳过 tmux 中无法确认的 bypass prompt。
 
 完整历史见 [新版本记录](#新版本记录)。
 
@@ -296,6 +296,16 @@ ccb reinstall
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.1.9</b> - 存储去重与关闭加固</summary>
+
+- 通过 Codex 投影资产 symlink/shared bundle，以及 Claude/Gemini 可重建 cache 路由和清理，减少 `.ccb` 体积增长。
+- `ccb cleanup` 现在会回收旧 Claude shared versions、Gemini shared cache、Claude 可重建 cache 和过期 pane crash log。
+- 加固 `ccb kill`：提前快照旧 `ccbd`/keeper pid，等待并兜底终止，同时避开新的 backend generation 竞态。
+- 修复 Claude tmux pane 中 bypass permissions 确认框无法交互导致的启动失败。
+
+</details>
+
+<details>
 <summary><b>v6.1.8</b> - macOS Claude Keychain Preference Hotfix</summary>
 
 - macOS managed Claude home 现在会继承 `Library/Preferences/com.apple.security.plist`，让 Claude 登录查找能解析预期的默认 Keychain。

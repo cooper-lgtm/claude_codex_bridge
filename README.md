@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.1.8-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.1.9-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -74,9 +74,9 @@ Build project-local teams with roles, pane layout, provider state, worktree isol
 <details>
 <summary><b>Latest release highlights</b></summary>
 
-- **macOS Claude login is steadier**: managed Claude homes now inherit the macOS default Keychain preference used during Claude login lookup.
-- **Auth isolation stays intact**: the Keychain preference is projected only for Darwin and is removed when Claude auth inheritance is disabled.
-- **Codex shared memory refresh remains fixed**: managed Codex startup avoids stale `resume` context after `.ccb/ccb_memory.md` changes.
+- **Provider storage is slimmer**: Codex, Claude, and Gemini now share or prune rebuildable provider assets instead of duplicating them across managed homes.
+- **Project shutdown is stricter**: `ccb kill` waits for the old `ccbd` and keeper pids to really exit and avoids killing a newer backend generation.
+- **Claude tmux startup is steadier**: auto-permission Claude panes skip the bypass confirmation prompt that cannot be answered inside tmux.
 
 See [Release Notes](#release-notes) for the full history.
 
@@ -238,6 +238,13 @@ Install note: the commands above install from a git checkout today. After that, 
 
 Maintainer-only release and repository tools live under `dev_tools/`. They are versioned in git but excluded from official release artifacts.
 
+## Useful Tools
+
+Optional user-facing tools live under `useful_tools/`. They are versioned in git
+and included in release artifacts, but they are not installed by default. Copy
+the tools you want into a global provider home or a specific managed agent home;
+see `useful_tools/README.md`.
+
 ## How to Use
 
 CCB is agent-first. You can use explicit `/ask`, explicit `$ask`, or let one agent decide to call another on its own.
@@ -298,6 +305,16 @@ Thanks to the [Linux.do community](https://linux.do) for testing, feedback, and 
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.1.9</b> - Storage Dedup And Shutdown Hardening</summary>
+
+- Reduces `.ccb` growth by routing Codex projected assets through symlink/shared bundle paths and by moving/pruning rebuildable Claude and Gemini cache content.
+- Extends `ccb cleanup` to reclaim old Claude shared versions, Gemini shared cache data, rebuildable Claude caches, and stale pane crash logs.
+- Hardens `ccb kill` so old `ccbd`/keeper pids are snapshotted, waited on, and terminated without racing a newer backend generation.
+- Prevents Claude tmux panes from blocking on the bypass permissions confirmation prompt.
+
+</details>
+
+<details>
 <summary><b>v6.1.8</b> - macOS Claude Keychain Preference Hotfix</summary>
 
 - Managed Claude homes on macOS now inherit `Library/Preferences/com.apple.security.plist` so Claude login lookup can resolve the expected default Keychain.

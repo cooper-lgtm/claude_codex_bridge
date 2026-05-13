@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import shutil
+import time
 
 from cli.services.daemon import inspect_daemon
 from provider_execution.state_store import ExecutionStateStore
@@ -16,6 +17,21 @@ _SAFE_GEMINI_CACHE_RELS = (
     Path('.cache') / 'node-gyp',
     Path('.cache') / 'vscode-ripgrep',
 )
+_SAFE_CLAUDE_CACHE_RELS = (
+    Path('.cache') / 'claude',
+    Path('.npm') / '_logs',
+    Path('.claude') / 'cache',
+    Path('.claude') / 'telemetry',
+    Path('.claude') / 'paste-cache',
+    Path('.claude') / 'plugins' / 'marketplaces',
+)
+_GEMINI_SHARED_CACHE_RELS = (
+    Path('npm') / '_cacache',
+    Path('xdg') / 'node-gyp',
+    Path('xdg') / 'vscode-ripgrep',
+)
+_PANE_CRASH_LOG_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_PANE_CRASH_LOG_MAX_KEEP_PER_RUNTIME = 50
 
 
 @dataclass(frozen=True)
@@ -54,7 +70,9 @@ def cleanup_project_storage(context, command) -> CleanupSummary:
         actions: list[CleanupAction] = []
         skipped: list[CleanupSkipped] = []
         _cleanup_claude_version_caches(context.paths, actions=actions, skipped=skipped)
+        _cleanup_claude_rebuildable_caches(context.paths, actions=actions, skipped=skipped)
         _cleanup_gemini_rebuildable_caches(context.paths, actions=actions, skipped=skipped)
+        _cleanup_pane_crash_logs(context.paths, actions=actions, skipped=skipped)
         return CleanupSummary(
             project_root=str(context.project.project_root),
             project_id=context.project.project_id,
@@ -134,15 +152,43 @@ def _pending_job_count_in_file(path: Path) -> int:
 
 def _cleanup_claude_version_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
     agents_dir = layout.agents_dir
-    if not agents_dir.exists():
-        return
-    for versions_dir in sorted(agents_dir.glob('*/provider-state/claude/home/.local/share/claude/versions')):
-        _cleanup_one_claude_versions_dir(versions_dir, actions=actions, skipped=skipped)
+    legacy_shared_versions = layout.shared_cache_dir / 'claude' / 'versions'
+    external_versions = layout.provider_external_cache_dir('claude') / 'versions'
+    legacy_shared_active_names: set[str] = set()
+    external_active_names: set[str] = set()
+    if agents_dir.exists():
+        for home in sorted(agents_dir.glob('*/provider-state/claude/home')):
+            active_name = _current_claude_version_name(home)
+            versions_dir = home / '.local' / 'share' / 'claude' / 'versions'
+            if active_name and versions_dir.is_symlink():
+                if _same_path(versions_dir, legacy_shared_versions):
+                    legacy_shared_active_names.add(active_name)
+                if _same_path(versions_dir, external_versions):
+                    external_active_names.add(active_name)
+            _cleanup_one_claude_versions_dir(
+                versions_dir,
+                active_version_names={active_name} if active_name else set(),
+                actions=actions,
+                skipped=skipped,
+            )
+    _cleanup_shared_claude_versions_dir(
+        legacy_shared_versions,
+        active_version_names=legacy_shared_active_names,
+        actions=actions,
+        skipped=skipped,
+    )
+    _cleanup_shared_claude_versions_dir(
+        external_versions,
+        active_version_names=external_active_names,
+        actions=actions,
+        skipped=skipped,
+    )
 
 
 def _cleanup_one_claude_versions_dir(
     versions_dir: Path,
     *,
+    active_version_names: set[str],
     actions: list[CleanupAction],
     skipped: list[CleanupSkipped],
 ) -> None:
@@ -157,9 +203,10 @@ def _cleanup_one_claude_versions_dir(
         return
     if not versions_dir.is_dir():
         return
-    home = versions_dir.parents[3]
-    current_dir = _current_claude_version_dir(home, versions_dir)
-    if current_dir is None:
+    version_paths = _claude_version_paths(versions_dir)
+    if not version_paths:
+        return
+    if not active_version_names:
         skipped.append(
             CleanupSkipped(
                 provider='claude',
@@ -168,35 +215,77 @@ def _cleanup_one_claude_versions_dir(
             )
         )
         return
-    version_dirs = [
-        path
-        for path in versions_dir.iterdir()
-        if path.is_dir() and not path.is_symlink() and _is_within(path, versions_dir)
-    ]
-    rollback = _newest_version_dir(path for path in version_dirs if path != current_dir)
-    keep = {current_dir}
-    if rollback is not None:
-        keep.add(rollback)
-    for path in version_dirs:
+    _prune_claude_versions(
+        versions_dir,
+        version_paths,
+        active_version_names=active_version_names,
+        provider='claude',
+        reason='old_claude_version_cache',
+        actions=actions,
+        skipped=skipped,
+    )
+
+
+def _cleanup_shared_claude_versions_dir(
+    versions_dir: Path,
+    *,
+    active_version_names: set[str],
+    actions: list[CleanupAction],
+    skipped: list[CleanupSkipped],
+) -> None:
+    if not versions_dir.exists():
+        return
+    if versions_dir.is_symlink():
+        skipped.append(CleanupSkipped(provider='claude', path=str(versions_dir), reason='shared_versions_dir_is_symlink'))
+        return
+    if not versions_dir.is_dir():
+        return
+    version_paths = _claude_version_paths(versions_dir)
+    if not version_paths:
+        return
+    _prune_claude_versions(
+        versions_dir,
+        version_paths,
+        active_version_names=active_version_names,
+        provider='claude',
+        reason='old_shared_claude_version_cache' if active_version_names else 'unreferenced_shared_claude_version_cache',
+        actions=actions,
+        skipped=skipped,
+    )
+
+
+def _prune_claude_versions(
+    versions_dir: Path,
+    version_paths: list[Path],
+    *,
+    active_version_names: set[str],
+    provider: str,
+    reason: str,
+    actions: list[CleanupAction],
+    skipped: list[CleanupSkipped],
+) -> None:
+    keep = {path for path in version_paths if path.name in active_version_names}
+    for path in version_paths:
         if path in keep:
             continue
         _remove_tree(
             path,
             root=versions_dir,
-            provider='claude',
+            provider=provider,
             kind='version_cache',
-            reason='old_claude_version_cache',
+            reason=reason,
             actions=actions,
             skipped=skipped,
         )
 
 
-def _current_claude_version_dir(home: Path, versions_dir: Path) -> Path | None:
+def _current_claude_version_name(home: Path) -> str | None:
     link = home / '.local' / 'bin' / 'claude'
     try:
         target = link.resolve(strict=True)
     except Exception:
         return None
+    versions_dir = home / '.local' / 'share' / 'claude' / 'versions'
     if not _is_within(target, versions_dir):
         return None
     try:
@@ -205,13 +294,31 @@ def _current_claude_version_dir(home: Path, versions_dir: Path) -> Path | None:
         return None
     if not relative.parts:
         return None
-    current = versions_dir / relative.parts[0]
-    if not current.is_dir() or current.is_symlink():
-        return None
-    return current
+    return relative.parts[0]
 
 
-def _newest_version_dir(paths) -> Path | None:
+def _claude_version_paths(versions_dir: Path) -> list[Path]:
+    try:
+        entries = sorted(versions_dir.iterdir(), key=lambda path: (_version_key(path.name), _safe_mtime(path), path.name))
+    except OSError:
+        return []
+    return [
+        path
+        for path in entries
+        if _looks_like_claude_version_name(path.name)
+        and (path.is_file() or path.is_dir())
+        and not path.is_symlink()
+        and _is_within(path, versions_dir)
+    ]
+
+
+def _looks_like_claude_version_name(value: str) -> bool:
+    if not value or not value[0].isdigit():
+        return False
+    return all(item.isalnum() or item in {'.', '_', '-'} for item in value)
+
+
+def _newest_version_path(paths) -> Path | None:
     candidates = list(paths)
     if not candidates:
         return None
@@ -235,23 +342,115 @@ def _safe_mtime(path: Path) -> float:
         return 0.0
 
 
-def _cleanup_gemini_rebuildable_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return Path(left).resolve(strict=False) == Path(right).resolve(strict=False)
+    except Exception:
+        return False
+
+
+def _cleanup_claude_rebuildable_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
     agents_dir = layout.agents_dir
     if not agents_dir.exists():
         return
-    for home in sorted(agents_dir.glob('*/provider-state/gemini/home')):
+    for home in sorted(agents_dir.glob('*/provider-state/claude/home')):
         if not home.is_dir() or home.is_symlink():
             continue
-        for relative in _SAFE_GEMINI_CACHE_RELS:
+        for relative in _SAFE_CLAUDE_CACHE_RELS:
             path = home / relative
             if not path.exists():
                 continue
             _remove_tree(
                 path,
                 root=home,
-                provider='gemini',
+                provider='claude',
                 kind='tool_cache',
-                reason='rebuildable_gemini_cache',
+                reason='rebuildable_claude_cache',
+                actions=actions,
+                skipped=skipped,
+            )
+
+
+def _cleanup_gemini_rebuildable_caches(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
+    agents_dir = layout.agents_dir
+    if agents_dir.exists():
+        for home in sorted(agents_dir.glob('*/provider-state/gemini/home')):
+            if not home.is_dir() or home.is_symlink():
+                continue
+            for relative in _SAFE_GEMINI_CACHE_RELS:
+                path = home / relative
+                if not path.exists():
+                    continue
+                _remove_tree(
+                    path,
+                    root=home,
+                    provider='gemini',
+                    kind='tool_cache',
+                    reason='rebuildable_gemini_cache',
+                    actions=actions,
+                    skipped=skipped,
+                )
+    _cleanup_gemini_cache_root(
+        layout.shared_cache_dir / 'gemini',
+        safe_rels=_GEMINI_SHARED_CACHE_RELS,
+        actions=actions,
+        skipped=skipped,
+    )
+    _cleanup_gemini_cache_root(
+        layout.provider_external_cache_dir('gemini'),
+        safe_rels=_GEMINI_SHARED_CACHE_RELS,
+        actions=actions,
+        skipped=skipped,
+    )
+
+
+def _cleanup_gemini_cache_root(
+    cache_root: Path,
+    *,
+    safe_rels: tuple[Path, ...],
+    actions: list[CleanupAction],
+    skipped: list[CleanupSkipped],
+) -> None:
+    if not cache_root.exists() or cache_root.is_symlink():
+        return
+    for relative in safe_rels:
+        path = cache_root / relative
+        if not path.exists():
+            continue
+        _remove_tree(
+            path,
+            root=cache_root,
+            provider='gemini',
+            kind='tool_cache',
+            reason='rebuildable_gemini_cache',
+            actions=actions,
+            skipped=skipped,
+        )
+
+
+def _cleanup_pane_crash_logs(layout, *, actions: list[CleanupAction], skipped: list[CleanupSkipped]) -> None:
+    agents_dir = layout.agents_dir
+    if not agents_dir.exists():
+        return
+    now = time.time()
+    for runtime_dir in sorted(agents_dir.glob('*/provider-runtime/*')):
+        if not runtime_dir.is_dir() or runtime_dir.is_symlink():
+            continue
+        logs = sorted(
+            (path for path in runtime_dir.glob('pane-crash-*.log') if path.is_file() and not path.is_symlink()),
+            key=lambda path: (_safe_mtime(path), path.name),
+            reverse=True,
+        )
+        for index, path in enumerate(logs):
+            age = now - _safe_mtime(path)
+            if index < _PANE_CRASH_LOG_MAX_KEEP_PER_RUNTIME and age < _PANE_CRASH_LOG_MAX_AGE_SECONDS:
+                continue
+            _remove_tree(
+                path,
+                root=runtime_dir,
+                provider=runtime_dir.name,
+                kind='crash_log',
+                reason='old_pane_crash_log',
                 actions=actions,
                 skipped=skipped,
             )

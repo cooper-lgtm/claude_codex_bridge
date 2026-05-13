@@ -224,7 +224,7 @@ _COMMAND_HELP = {
 
         Safety:
           - Refuses to run while ccbd is active or ask jobs are pending/running.
-          - Keeps Claude's current version and one rollback version.
+          - Keeps Claude versions currently referenced by managed homes.
           - Does not remove provider sessions, auth, plugin bundles, mailbox data, or runtime authority.
           - Use `ccb doctor storage` before cleanup to inspect storage classes.
     """,

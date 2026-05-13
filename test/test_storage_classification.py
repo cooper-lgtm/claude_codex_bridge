@@ -41,6 +41,21 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     _write(codex_home / 'config.toml', '# config\n')
     _write(codex_home / '.tmp' / 'plugins' / 'plugins' / 'demo' / 'SKILL.md')
     _write(codex_home / '.tmp' / 'plugins.sha', 'abc\n')
+    source_skills = tmp_path / 'source-codex-home' / 'skills'
+    source_skills.mkdir(parents=True, exist_ok=True)
+    if hasattr(os, 'symlink'):
+        os.symlink(source_skills, codex_home / 'skills')
+        _write(
+            codex_home / 'skills.ccb-projection.json',
+            json.dumps(
+                {
+                    'record_type': 'ccb_projected_asset',
+                    'label': 'codex-inherited-skills',
+                    'source': str(source_skills),
+                }
+            )
+            + '\n',
+        )
 
     _write(claude_home / '.claude.json', '{}\n')
     _write(claude_home / '.claude' / '.credentials.json', '{}\n')
@@ -61,9 +76,9 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     records = _records_by_suffix(payload)
 
     assert payload['shared_cache_root'] == str(ccb / 'shared-cache')
-    assert payload['shared_cache_root_usable'] is False
-    assert payload['shared_cache_status'] == 'disabled'
-    assert payload['shared_cache_reason'] == 'not_implemented'
+    assert payload['shared_cache_root_usable'] is True
+    assert payload['shared_cache_status'] == 'enabled'
+    assert payload['shared_cache_reason'] == 'enabled'
     assert records['agents/agent1/runtime.json']['storage_class'] == 'authority'
     assert records['agents/agent1/memory.md']['storage_class'] == 'user_content'
     assert records['agents/agent1/memory.md']['reason'] == 'agent_private_memory'
@@ -82,6 +97,8 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     assert records['agents/agent1/provider-state/codex/home/.ccb-session-namespace.json']['storage_class'] == 'session'
     assert records['agents/agent1/provider-state/codex/home/auth.json']['storage_class'] == 'secret'
     assert records['agents/agent1/provider-state/codex/home/config.toml']['storage_class'] == 'projected_config'
+    if hasattr(os, 'symlink'):
+        assert records['agents/agent1/provider-state/codex/home/skills']['storage_class'] == 'projected_config'
     assert (
         records['agents/agent1/provider-state/codex/home/.tmp/plugins/plugins/demo/SKILL.md']['storage_class']
         == 'startup_authority_bundle'
@@ -161,6 +178,22 @@ def test_path_layout_ensures_provider_shared_cache_manifest(tmp_path: Path) -> N
     assert manifest['project_id'] == layout.project_id
     assert manifest['runtime_state_root'] == str(layout.runtime_state_root)
     assert manifest['entries'] == []
+
+
+def test_path_layout_ensures_provider_external_cache_manifest(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    xdg_cache = tmp_path / 'xdg-cache'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(xdg_cache))
+    layout = PathLayout(project_root)
+
+    cache_dir = layout.ensure_provider_external_cache_dir('claude', created_at='2026-05-13T00:00:00Z')
+    manifest = json.loads((cache_dir / 'MANIFEST.json').read_text(encoding='utf-8'))
+
+    assert cache_dir == xdg_cache / 'ccb' / 'projects' / layout.project_id[:16] / 'provider-cache' / 'claude'
+    assert manifest['record_type'] == 'ccb_external_provider_cache_manifest'
+    assert manifest['provider'] == 'claude'
+    assert manifest['project_id'] == layout.project_id
+    assert manifest['project_root'] == str(layout.project_root)
 
 
 def test_path_layout_rejects_noncanonical_shared_cache_provider(tmp_path: Path) -> None:

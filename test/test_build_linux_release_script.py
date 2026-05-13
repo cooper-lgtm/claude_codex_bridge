@@ -37,6 +37,8 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".tmp_pytest" / "run").mkdir(parents=True)
     (repo_root / ".tmp_test_env_arch1" / "env").mkdir(parents=True)
     (repo_root / "dev_tools" / "skills").mkdir(parents=True)
+    (repo_root / "useful_tools" / "codex_skills" / "plan-tree").mkdir(parents=True)
+    (repo_root / "useful_tools" / "claude_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "lib").mkdir(parents=True)
     (repo_root / "ccb").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     (repo_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
@@ -48,10 +50,14 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".tmp_pytest" / "run" / "state.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_test_env_arch1" / "env" / "state.json").write_text("{}", encoding="utf-8")
     (repo_root / "dev_tools" / "skills" / "README.md").write_text("dev only\n", encoding="utf-8")
+    (repo_root / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
+    (repo_root / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
 
     module.copy_repo_tree(repo_root, destination)
 
     assert (destination / "lib" / "app.py").exists()
+    assert (destination / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").exists()
+    assert (destination / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").exists()
     assert not (destination / ".git").exists()
     assert not (destination / ".ccb").exists()
     assert not (destination / ".ccb-requests").exists()

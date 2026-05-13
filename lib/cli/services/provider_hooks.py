@@ -7,6 +7,7 @@ import sys
 
 from agents.models import RuntimeMode
 from provider_core.source_home import current_provider_source_home
+from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
 from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
 from provider_backends.codex.launcher_runtime import resolve_codex_home_layout
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
@@ -143,6 +144,10 @@ def _materialize_provider_home(
             memory_projection_event_path=layout.agent_events_path(spec.name),
             memory_projection_marker_path=Path(runtime_dir) / 'claude-memory-projection.json',
         )
+        _route_claude_binary_cache_if_possible(
+            layout=layout,
+            home_root=home_root,
+        )
         _record_claude_binary_cache_drift_if_present(
             layout=layout,
             spec=spec,
@@ -215,6 +220,8 @@ def resolve_gemini_home_root(*, layout, agent_name: str, resolved_profile: Resol
 
 def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: Path, home_root: Path) -> None:
     versions_dir = Path(home_root) / '.local' / 'share' / 'claude' / 'versions'
+    if _claude_versions_dir_points_to_shared_cache(layout, versions_dir):
+        return
     signature = _claude_versions_cache_signature(versions_dir)
     if signature is None:
         return
@@ -244,6 +251,14 @@ def _record_claude_binary_cache_drift_if_present(*, layout, spec, runtime_dir: P
         return
 
 
+def _route_claude_binary_cache_if_possible(*, layout, home_root: Path) -> None:
+    try:
+        cache_root = layout.ensure_provider_external_cache_dir('claude')
+    except Exception:
+        return
+    route_claude_binary_cache(home_root, cache_root)
+
+
 def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | None:
     try:
         if versions_dir.is_symlink():
@@ -264,6 +279,19 @@ def _claude_versions_cache_signature(versions_dir: Path) -> dict[str, object] | 
         'versions_dir': str(versions_dir),
         'version_names': version_names,
     }
+
+
+def _claude_versions_dir_points_to_shared_cache(layout, versions_dir: Path) -> bool:
+    try:
+        resolved = Path(versions_dir).resolve()
+        external_versions = layout.provider_external_cache_dir('claude') / 'versions'
+        legacy_shared_versions = layout.provider_shared_cache_dir('claude') / 'versions'
+        return Path(versions_dir).is_symlink() and resolved in {
+            external_versions.resolve(strict=False),
+            legacy_shared_versions.resolve(strict=False),
+        }
+    except Exception:
+        return False
 
 
 def _same_cached_signature(marker_path: Path, signature: dict[str, object]) -> bool:

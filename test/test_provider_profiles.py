@@ -10,7 +10,9 @@ import pytest
 from agents.models import AgentSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
+from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+import provider_core.projected_assets as projected_assets
 import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
 from provider_profiles import materialize_provider_profile, validate_provider_runtime_home_uniqueness
@@ -120,11 +122,195 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert (runtime_home / 'config.toml').is_file()
     assert (runtime_home / 'auth.json').is_file()
     assert (runtime_home / 'skills' / 'demo.md').is_file()
+    assert (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
+    assert (runtime_home / 'commands').is_symlink()
     assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
+    assert (runtime_home / '.tmp' / 'plugins').is_symlink()
+    assert (runtime_home / '.tmp' / 'plugins').resolve() == (
+        project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'plugins-sha-v1'
+    ).resolve()
     assert (runtime_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json').is_file()
     assert (runtime_home / '.tmp' / 'plugins' / 'plugins' / 'demo-plugin' / '.codex-plugin' / 'plugin.json').is_file()
     assert (runtime_home / 'sessions').is_dir()
+
+
+def test_materialize_codex_home_config_falls_back_to_marked_copy_when_symlink_fails(tmp_path: Path, monkeypatch) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('demo skill\n', encoding='utf-8')
+
+    def fail_symlink(self, target, target_is_directory=False):
+        raise OSError('symlink disabled')
+
+    monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'demo skill\n'
+    assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (target_home / 'skills' / 'demo.md').exists()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    user_assets = tmp_path / 'user-skills'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    user_assets.mkdir(parents=True, exist_ok=True)
+    (user_assets / 'custom.md').write_text('user skill\n', encoding='utf-8')
+    target_home.mkdir(parents=True, exist_ok=True)
+    try:
+        (target_home / 'skills').symlink_to(user_assets, target_is_directory=True)
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').resolve() == user_assets.resolve()
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').resolve() == (source_home / 'skills').resolve()
+    assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_codex_home_config_leaves_source_home_assets_in_place(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        source_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (source_home / 'skills').is_symlink()
+    assert (source_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert not (source_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_routes_plugins_through_shared_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    _write_codex_plugin_source(source_home, sha='shared-plugin-sha')
+    first_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    second_home = project_root / '.ccb' / 'agents' / 'agent2' / 'provider-state' / 'codex' / 'home'
+
+    codex_home_config.materialize_codex_home_config(
+        first_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+    codex_home_config.materialize_codex_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'shared-plugin-sha'
+    assert (bundle / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (first_home / '.tmp' / 'plugins').is_symlink()
+    assert (second_home / '.tmp' / 'plugins').is_symlink()
+    assert (first_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (second_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (first_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+    assert (second_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+
+
+def test_materialize_codex_home_config_migrates_current_legacy_plugin_copy_to_shared_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    target_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    _write_codex_plugin_source(source_home, sha='shared-plugin-sha')
+    shutil.copytree(source_home / '.tmp' / 'plugins', target_home / '.tmp' / 'plugins')
+    (target_home / '.tmp' / 'plugins' / 'plugins-clone-residue').mkdir(parents=True, exist_ok=True)
+    (target_home / '.tmp' / 'plugins.sha').write_text('shared-plugin-sha\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'shared-plugin-sha'
+    assert (target_home / '.tmp' / 'plugins').is_symlink()
+    assert (target_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (target_home / '.tmp' / 'plugins.ccb-projection.json').is_file()
+    assert (target_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+
+
+def test_materialize_codex_profile_routes_plugins_through_shared_bundle(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    _write_codex_plugin_source(source_home, sha='profile-plugin-sha')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'profile-plugin-sha'
+    assert (bundle / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (runtime_home / '.tmp' / 'plugins').is_symlink()
+    assert (runtime_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'profile-plugin-sha\n'
 
 
 def test_materialize_codex_profile_preserves_explicit_runtime_home(tmp_path: Path, monkeypatch) -> None:
@@ -664,7 +850,9 @@ def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marke
     runtime_home = Path(profile.runtime_home or '')
     marketplace_path = runtime_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json'
     skill_path = runtime_home / '.tmp' / 'plugins' / 'plugins' / 'weatherpromise' / 'skills' / 'weatherpromise' / 'SKILL.md'
-    assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
+    first_marker = (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8').strip()
+    assert first_marker
+    assert (project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / first_marker).is_dir()
     assert skill_path.read_text(encoding='utf-8') == 'plugin skill no sha v1\n'
 
     _write_codex_plugin_source(
@@ -684,7 +872,10 @@ def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marke
     marketplace_payload = json.loads(marketplace_path.read_text(encoding='utf-8'))
     assert marketplace_payload['name'] == 'market-no-sha-v2'
     assert skill_path.read_text(encoding='utf-8') == 'plugin skill no sha v2 updated\n'
-    assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
+    second_marker = (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8').strip()
+    assert second_marker
+    assert second_marker != first_marker
+    assert (project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / second_marker).is_dir()
 
 
 def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp_path: Path, monkeypatch) -> None:
@@ -702,7 +893,7 @@ def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp
     )
 
     copied_sources: list[Path] = []
-    real_copytree = codex_home_config.shutil.copytree
+    real_copytree = projected_assets.shutil.copytree
 
     def tracking_copytree(src, dst, *args, **kwargs):
         src_path = Path(src)
@@ -710,7 +901,7 @@ def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp
             copied_sources.append(src_path)
         return real_copytree(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(codex_home_config.shutil, 'copytree', tracking_copytree)
+    monkeypatch.setattr(projected_assets.shutil, 'copytree', tracking_copytree)
 
     materialize_provider_profile(
         layout=PathLayout(project_root),
@@ -781,6 +972,108 @@ def test_materialize_claude_profile_keeps_runtime_home_managed_by_agent_state(tm
     )
 
     assert profile.runtime_home is None
+
+
+def test_route_claude_binary_cache_links_empty_versions_dir(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'linked_empty'
+    assert versions.is_symlink()
+    assert versions.resolve() == (shared_cache / 'versions').resolve()
+    assert (versions.parent / 'versions.ccb-projection.json').is_file()
+
+
+def test_route_claude_binary_cache_refuses_conflicting_shared_version(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    (versions / '2.1.137').mkdir(parents=True, exist_ok=True)
+    (versions / '2.1.137' / 'claude').write_text('local binary\n', encoding='utf-8')
+    shared_version = shared_cache / 'versions' / '2.1.137'
+    shared_version.mkdir(parents=True, exist_ok=True)
+    (shared_version / 'claude').write_text('different shared binary\n', encoding='utf-8')
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    assert result['status'] == 'skipped'
+    assert result['reason'] == 'shared_version_content_conflict'
+    assert versions.is_dir()
+    assert not versions.is_symlink()
+    assert (versions / '2.1.137' / 'claude').read_text(encoding='utf-8') == 'local binary\n'
+    assert (shared_version / 'claude').read_text(encoding='utf-8') == 'different shared binary\n'
+
+
+def test_route_claude_binary_cache_migrates_executable_version_files(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.mkdir(parents=True, exist_ok=True)
+    binary = versions / '2.1.139'
+    binary.write_text('current executable\n', encoding='utf-8')
+    binary.chmod(0o755)
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    shared_binary = shared_cache / 'versions' / '2.1.139'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'migrated'
+    assert result['version_names'] == ('2.1.139',)
+    assert versions.is_symlink()
+    assert versions.resolve() == (shared_cache / 'versions').resolve()
+    assert shared_binary.read_text(encoding='utf-8') == 'current executable\n'
+    assert shared_binary.stat().st_mode & 0o111
+
+
+def test_route_claude_binary_cache_migrates_legacy_shared_symlink(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    legacy_cache = tmp_path / 'legacy-shared-cache' / 'claude'
+    external_cache = tmp_path / 'external-cache' / 'claude'
+    legacy_versions = legacy_cache / 'versions'
+    legacy_binary = legacy_versions / '2.1.139'
+    legacy_binary.parent.mkdir(parents=True, exist_ok=True)
+    legacy_binary.write_text('legacy executable\n', encoding='utf-8')
+    legacy_binary.chmod(0o755)
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.parent.mkdir(parents=True, exist_ok=True)
+    versions.symlink_to(legacy_versions, target_is_directory=True)
+
+    result = route_claude_binary_cache(home, external_cache)
+
+    external_binary = external_cache / 'versions' / '2.1.139'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'migrated_symlink'
+    assert versions.is_symlink()
+    assert versions.resolve() == (external_cache / 'versions').resolve()
+    assert external_binary.read_text(encoding='utf-8') == 'legacy executable\n'
+    assert legacy_binary.exists()
+
+
+def test_route_claude_binary_cache_points_existing_shared_home_to_latest_version(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    shared_versions = shared_cache / 'versions'
+    old_binary = shared_versions / '2.1.139'
+    new_binary = shared_versions / '2.1.140'
+    old_binary.parent.mkdir(parents=True, exist_ok=True)
+    old_binary.write_text('old executable\n', encoding='utf-8')
+    new_binary.write_text('new executable\n', encoding='utf-8')
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.parent.mkdir(parents=True, exist_ok=True)
+    versions.symlink_to(shared_versions, target_is_directory=True)
+    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
+    (home / '.local' / 'bin' / 'claude').symlink_to(old_binary)
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'already_shared'
+    assert result['active_version_name'] == '2.1.140'
+    assert (home / '.local' / 'bin' / 'claude').resolve() == new_binary.resolve()
 
 
 def test_materialize_claude_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:

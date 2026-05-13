@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v6.1.9 (2026-05-13)
+
+### Storage Dedup And Shutdown Hardening
+
+- **Provider Storage Footprint Reduced**: Codex projected assets now prefer symlinks/shared bundles, Claude version/cache cleanup handles shared cache locations, and Gemini rebuildable caches route through shared/external cache paths instead of piling up per agent
+- **Cleanup Reclaims Runtime Residue**: `ccb cleanup` now prunes old Claude shared versions, Gemini shared cache content, rebuildable Claude caches, and stale pane crash logs while preserving session/auth authority
+- **Kill Shutdown Reliability Hardened**: `ccb kill` now snapshots old `ccbd`/keeper pids before shutdown, waits for them to really exit, treats Linux zombies as dead, and avoids killing a newer backend generation
+- **Claude Tmux Startup Stabilized**: Claude auto-permission launches now use `--permission-mode bypassPermissions` plus a settings overlay to skip the tmux-unanswerable bypass confirmation prompt
+
 ## v6.1.8 (2026-05-13)
 
 ### macOS Claude Keychain Preference Hotfix

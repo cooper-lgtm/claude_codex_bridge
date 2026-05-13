@@ -388,6 +388,11 @@ def test_prepare_provider_workspace_records_claude_binary_cache_drift_once(tmp_p
     (versions_dir / '2.1.137').mkdir(parents=True, exist_ok=True)
     (versions_dir / '2.1.137' / 'claude').write_text('binary\n', encoding='utf-8')
 
+    monkeypatch.setattr(
+        'cli.services.provider_hooks._route_claude_binary_cache_if_possible',
+        lambda *, layout, home_root: None,
+    )
+
     for refresh_profile in (True, False):
         prepare_provider_workspace(
             layout=layout,
@@ -419,6 +424,10 @@ def test_prepare_provider_workspace_records_new_claude_binary_cache_signature(
     layout = PathLayout(project_root)
     versions_dir = layout.agent_provider_state_dir('agent1', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
     (versions_dir / '2.1.137').mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'cli.services.provider_hooks._route_claude_binary_cache_if_possible',
+        lambda *, layout, home_root: None,
+    )
 
     prepare_provider_workspace(
         layout=layout,
@@ -469,6 +478,83 @@ def test_prepare_provider_workspace_does_not_record_claude_binary_cache_drift_wh
         return
     events = [json.loads(line) for line in events_path.read_text(encoding='utf-8').splitlines() if line.strip()]
     assert all(event.get('event_type') != 'claude_binary_cache_drift' for event in events)
+
+
+def test_prepare_provider_workspace_routes_claude_binary_cache_to_external_cache(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    monkeypatch.setenv('HOME', str(tmp_path / 'system-home'))
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg-cache'))
+    layout = PathLayout(project_root)
+    first_versions = layout.agent_provider_state_dir('agent1', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
+    second_versions = layout.agent_provider_state_dir('agent2', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
+    first_versions.mkdir(parents=True, exist_ok=True)
+    second_versions.mkdir(parents=True, exist_ok=True)
+    (first_versions / '2.1.137').write_text('binary\n', encoding='utf-8')
+    (second_versions / '2.1.137').write_text('binary\n', encoding='utf-8')
+
+    for agent_name in ('agent1', 'agent2'):
+        prepare_provider_workspace(
+            layout=layout,
+            spec=_spec(agent_name),
+            workspace_path=workspace,
+            completion_dir=layout.agent_provider_runtime_dir(agent_name, 'claude') / 'completion',
+            agent_name=agent_name,
+            refresh_profile=True,
+        )
+
+    shared_versions = layout.provider_external_cache_dir('claude') / 'versions'
+    assert first_versions.is_symlink()
+    assert second_versions.is_symlink()
+    assert first_versions.resolve() == shared_versions.resolve()
+    assert second_versions.resolve() == shared_versions.resolve()
+    assert (shared_versions / '2.1.137').read_text(encoding='utf-8') == 'binary\n'
+    assert not (layout.shared_cache_dir / 'claude' / 'versions' / '2.1.137').exists()
+    assert (first_versions.parent / 'versions.ccb-projection.json').is_file()
+    for agent_name in ('agent1', 'agent2'):
+        events_path = layout.agent_events_path(agent_name)
+        events = [json.loads(line) for line in events_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        assert all(event.get('event_type') != 'claude_binary_cache_drift' for event in events)
+
+
+def test_prepare_provider_workspace_keeps_unknown_claude_versions_dir_unmodified(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    monkeypatch.setenv('HOME', str(tmp_path / 'system-home'))
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg-cache'))
+    layout = PathLayout(project_root)
+    versions_dir = layout.agent_provider_state_dir('agent1', 'claude') / 'home' / '.local' / 'share' / 'claude' / 'versions'
+    (versions_dir / '2.1.137').mkdir(parents=True, exist_ok=True)
+    (versions_dir / '2.1.137' / 'claude').write_text('binary\n', encoding='utf-8')
+    (versions_dir / 'notes.txt').write_text('do not delete\n', encoding='utf-8')
+
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec('agent1'),
+        workspace_path=workspace,
+        completion_dir=layout.agent_provider_runtime_dir('agent1', 'claude') / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    assert versions_dir.is_dir()
+    assert not versions_dir.is_symlink()
+    assert (versions_dir / 'notes.txt').read_text(encoding='utf-8') == 'do not delete\n'
+    assert not (layout.shared_cache_dir / 'claude' / 'versions' / '2.1.137').exists()
+    assert not (layout.provider_external_cache_dir('claude') / 'versions' / '2.1.137').exists()
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    drift_events = [event for event in events if event.get('event_type') == 'claude_binary_cache_drift']
+    assert drift_events[-1]['reason'] == 'per_agent_versions_cache_present'
 
 
 def test_prepare_provider_workspace_uses_account_home_when_current_home_is_managed_claude(

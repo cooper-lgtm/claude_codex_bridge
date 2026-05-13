@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Tree"
+  short_description: "Maintain linked planning document trees"
+  default_prompt: "Use $plan-tree to organize this planning folder and reconcile roadmap, topics, decisions, and open questions."

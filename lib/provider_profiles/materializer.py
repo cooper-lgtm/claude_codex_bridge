@@ -166,7 +166,11 @@ def _materialize_codex_profile(
         )
         if migrated_legacy_home:
             _discard_migrated_codex_projection(runtime_home)
-    materialize_codex_home_config(runtime_home, profile=profile_spec)
+    materialize_codex_home_config(
+        runtime_home,
+        profile=profile_spec,
+        shared_cache_root=layout.shared_cache_dir,
+    )
 
     return ResolvedProviderProfile(
         provider=spec.provider,

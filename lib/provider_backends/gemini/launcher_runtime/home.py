@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -15,6 +16,7 @@ from project_memory import (
 )
 from project_memory.hashing import sha256_text
 from storage.atomic import atomic_write_text
+from storage.paths import PathLayout
 
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
@@ -57,10 +59,14 @@ def prepare_gemini_home_overrides(
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
         )
+    cache_root = _gemini_shared_cache_root(project_root, runtime_dir)
     return {
         'HOME': str(layout.home_root),
         'GEMINI_CLI_HOME': str(layout.home_root),
         'GEMINI_ROOT': str(layout.tmp_root),
+        'NPM_CONFIG_CACHE': str(cache_root / 'npm'),
+        'npm_config_cache': str(cache_root / 'npm'),
+        'XDG_CACHE_HOME': str(cache_root / 'xdg'),
     }
 
 
@@ -87,6 +93,49 @@ def _managed_isolated_home(runtime_dir: Path) -> Path:
     if state_dir is not None:
         return state_dir / 'home'
     return Path(runtime_dir).expanduser() / 'gemini-home'
+
+
+def _gemini_shared_cache_root(project_root: Path | None, runtime_dir: Path) -> Path:
+    cache_root = _external_project_cache_root(project_root, runtime_dir)
+    if cache_root is None:
+        cache_root = Path(runtime_dir).expanduser() / 'rebuildable-cache'
+    root = cache_root / 'gemini'
+    (root / 'npm').mkdir(parents=True, exist_ok=True)
+    (root / 'xdg').mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _external_project_cache_root(project_root: Path | None, runtime_dir: Path) -> Path | None:
+    root = Path(project_root).expanduser() if project_root is not None else _project_root_from_runtime_dir(runtime_dir)
+    if root is None:
+        return None
+    try:
+        layout = PathLayout(root)
+    except Exception:
+        return None
+    return _user_cache_home() / 'ccb' / 'projects' / layout.project_id[:16] / 'provider-cache'
+
+
+def _user_cache_home() -> Path:
+    raw = str(os.environ.get('XDG_CACHE_HOME') or '').strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / '.cache'
+
+
+def _project_root_from_runtime_dir(runtime_dir: Path) -> Path | None:
+    ccb_dir = _project_ccb_dir(runtime_dir)
+    if ccb_dir is None:
+        return None
+    return ccb_dir.parent
+
+
+def _project_ccb_dir(runtime_dir: Path) -> Path | None:
+    current = Path(runtime_dir).expanduser()
+    for candidate in (current, *current.parents):
+        if candidate.name == '.ccb':
+            return candidate
+    return None
 
 
 def _is_within_home_root(candidate: Path, managed_home: Path) -> bool:

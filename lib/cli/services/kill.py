@@ -14,6 +14,7 @@ from cli.services.kill_runtime.finalize import finalize_kill as _finalize_kill_i
 from cli.services.kill_runtime.lifecycle import destroy_project_namespace as _destroy_project_namespace_impl
 from cli.services.kill_runtime.pid_cleanup import (
     collect_agent_pid_candidates as _collect_agent_pid_candidates_impl,
+    collect_project_authority_pid_candidates as _collect_project_authority_pid_candidates_impl,
     collect_project_process_candidates as _collect_project_process_candidates_impl,
     path_within as _path_within_impl,
     pid_matches_project as _pid_matches_project_impl,
@@ -37,6 +38,11 @@ from cli.models import ParsedKillCommand
 from ccbd.models import LeaseHealth
 
 from .daemon import CcbdServiceError, KillSummary, connect_mounted_daemon, inspect_daemon, record_shutdown_intent, shutdown_daemon
+from .daemon_runtime.facade import SHUTDOWN_TIMEOUT_S as _DEF_SHUTDOWN_TIMEOUT_S
+from .daemon_runtime.keeper import keeper_pid as _keeper_pid
+from .daemon_runtime.keeper import wait_for_keeper_exit as _wait_for_keeper_exit
+from .daemon_runtime.processes import lease_pid as _lease_pid
+from .daemon_runtime.processes import wait_for_pid_exit as _wait_for_pid_exit
 from .tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from .tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup_project_tmux_orphans_by_socket
 from .tmux_ui import set_tmux_ui_active
@@ -50,7 +56,12 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
     remote_summary = _request_remote_stop(context, force=command.force)
     preparation = _prepare_local_shutdown(context, force=command.force)
     _destroy_project_namespace(context, force=command.force)
-    summary = _resolve_shutdown_summary(context, remote_summary=remote_summary, force=command.force)
+    summary = _resolve_shutdown_summary(
+        context,
+        remote_summary=remote_summary,
+        force=command.force,
+        preparation=preparation,
+    )
     final_summary = _finalize_kill(
         context,
         force=command.force,
@@ -87,6 +98,7 @@ def _prepare_local_shutdown(context: CliContext, *, force: bool):
         context,
         force=force,
         collect_agent_pid_candidates_fn=_collect_agent_pid_candidates,
+        collect_project_authority_pid_candidates_fn=_collect_project_authority_pid_candidates,
     )
 
 
@@ -99,13 +111,23 @@ def _destroy_project_namespace(context: CliContext, *, force: bool) -> None:
     )
 
 
-def _resolve_shutdown_summary(context: CliContext, *, remote_summary: KillSummary | None, force: bool) -> KillSummary:
+def _resolve_shutdown_summary(
+    context: CliContext,
+    *,
+    remote_summary: KillSummary | None,
+    force: bool,
+    preparation,
+) -> KillSummary:
     return _resolve_shutdown_summary_impl(
         context,
         remote_summary=remote_summary,
         force=force,
         shutdown_daemon_fn=shutdown_daemon,
-        await_remote_shutdown_fn=_await_remote_shutdown,
+        await_remote_shutdown_fn=lambda current, *, force: _await_remote_shutdown(
+            current,
+            force=force,
+            expected_pids=getattr(preparation, 'control_plane_pids', ()),
+        ),
         service_error_cls=CcbdServiceError,
         kill_summary_cls=KillSummary,
     )
@@ -137,7 +159,13 @@ def _finalize_kill(
     )
 
 
-def _await_remote_shutdown(context: CliContext, *, force: bool, timeout_s: float = 2.5) -> KillSummary:
+def _await_remote_shutdown(
+    context: CliContext,
+    *,
+    force: bool,
+    timeout_s: float = 2.5,
+    expected_pids: tuple[int, ...] = (),
+) -> KillSummary:
     return _await_remote_shutdown_impl(
         context,
         force=force,
@@ -145,6 +173,14 @@ def _await_remote_shutdown(context: CliContext, *, force: bool, timeout_s: float
         lease_health_cls=LeaseHealth,
         kill_summary_cls=KillSummary,
         timeout_s=timeout_s,
+        expected_pids=expected_pids,
+        lease_pid_fn=_lease_pid,
+        keeper_pid_fn=_keeper_pid,
+        wait_for_pid_exit_fn=_wait_for_pid_exit,
+        wait_for_keeper_exit_fn=_wait_for_keeper_exit,
+        is_pid_alive_fn=is_pid_alive,
+        terminate_pid_tree_fn=terminate_pid_tree,
+        shutdown_timeout_s=_DEF_SHUTDOWN_TIMEOUT_S,
     )
 
 
@@ -152,6 +188,7 @@ _summary_from_stop_all_payload = _summary_from_stop_all_payload_impl
 _merge_cleanup_summaries = _merge_cleanup_summaries_impl
 _extra_agent_dir_names = _extra_agent_dir_names_impl
 _collect_agent_pid_candidates = _collect_agent_pid_candidates_impl
+_collect_project_authority_pid_candidates = _collect_project_authority_pid_candidates_impl
 _read_proc_path = _read_proc_path_impl
 _read_proc_cmdline = _read_proc_cmdline_impl
 _path_within = _path_within_impl

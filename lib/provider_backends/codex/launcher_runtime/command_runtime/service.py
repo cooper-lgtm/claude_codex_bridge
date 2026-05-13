@@ -36,6 +36,9 @@ def build_start_cmd(
         runtime_dir,
         profile,
         refresh_home=False,
+        project_root=project_root,
+        agent_name=spec.name,
+        workspace_path=_path_or_none(launch_context.get('workspace_path')),
     )
     codex_args = _codex_args(
         command,
