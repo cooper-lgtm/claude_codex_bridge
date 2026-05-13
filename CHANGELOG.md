@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.1.13 (2026-05-14)
+
+### macOS Claude Keychain Fallback
+
+- **Claude Keychain Fallback Added**: managed Claude homes on macOS now link `Library/Keychains` when `com.apple.security.plist` is absent, so official Claude login lookup still resolves the user's login keychain
+- **Auth Cleanup Remains Symmetric**: disabling Claude auth inheritance removes both the projected Keychain preference and the fallback Keychains link
+- **Storage Diagnostics Hardened**: `ccb doctor storage` now classifies the managed Claude `Library/Keychains` symlink as secret auth state instead of unknown out-of-bounds residue
+
 ## v6.1.12 (2026-05-13)
 
 ### Claude Tmux Permission Release
