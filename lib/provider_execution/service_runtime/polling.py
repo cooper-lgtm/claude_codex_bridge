@@ -78,6 +78,16 @@ def process_active_job(
             previous_submission=submission,
             now=now,
         )
+        if result.decision is None:
+            timeout_result = timeout_poll_result(
+                service,
+                job_id=job_id,
+                submission=result.submission,
+                adapter=adapter,
+                now=now,
+            )
+            if timeout_result is not None:
+                result = timeout_result
 
     service._active[job_id] = result.submission
     persist_submission(

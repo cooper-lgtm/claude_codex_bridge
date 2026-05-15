@@ -1092,7 +1092,7 @@ def test_dispatcher_timeout_delivers_inspection_notice_to_caller(tmp_path: Path)
     assert 'timed out before a confirmed terminal reply' in ack['reply']
 
 
-def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_state(tmp_path: Path) -> None:
+def test_job_heartbeat_records_internal_progress_without_replying_before_terminal_message(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-job-heartbeat'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -1145,7 +1145,6 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
     heartbeat_clock = StepClock(
         '2026-03-30T00:09:59Z',
         '2026-03-30T00:10:00Z',
-        '2026-03-30T00:15:00Z',
         '2026-03-30T00:20:00Z',
         '2026-03-30T00:21:00Z',
     )
@@ -1183,20 +1182,12 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
 
     heartbeats.tick(dispatcher)
     replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 1
-    assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
-    assert replies[0].diagnostics.get('notice_kind') == 'heartbeat'
-    assert 'CCB_HEARTBEAT ' in replies[0].reply
-    assert MessageStore(layout).list_all()[-1].message_state is MessageState.PARTIALLY_REPLIED
+    assert replies == []
+    assert MessageStore(layout).list_all()[-1].message_state is MessageState.RUNNING
     assert heartbeat_path.exists()
 
     heartbeats.tick(dispatcher)
-    assert len(ReplyStore(layout).list_message(message.message_id)) == 1
-
-    heartbeats.tick(dispatcher)
-    replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 2
-    assert all(reply.diagnostics.get('notice_kind') == 'heartbeat' for reply in replies)
+    assert ReplyStore(layout).list_message(message.message_id) == []
 
     dispatcher.complete(
         job_id,
@@ -1208,10 +1199,107 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
     heartbeats.tick(dispatcher)
 
     replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 3
+    assert len(replies) == 1
     assert replies[-1].terminal_status is ReplyTerminalStatus.COMPLETED
     assert replies[-1].reply == 'final answer'
     assert MessageStore(layout).list_all()[-1].message_state is MessageState.COMPLETED
+    assert heartbeat_path.exists() is False
+
+
+def test_job_heartbeat_terminalizes_after_three_internal_no_progress_intervals(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-job-heartbeat-timeout'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+
+    class SilentExecutionService:
+        def start(self, job, *, runtime_context=None) -> None:
+            del job, runtime_context
+
+        def cancel(self, job_id: str) -> None:
+            del job_id
+
+        def finish(self, job_id: str) -> None:
+            del job_id
+
+        def acknowledge(self, job_id: str) -> None:
+            del job_id
+
+        def acknowledge_item(self, job_id: str, *, event_seq: int | None) -> None:
+            del job_id, event_seq
+
+        def poll(self):
+            return ()
+
+    class StepClock:
+        def __init__(self, *values: str) -> None:
+            self._values = list(values)
+            self._index = 0
+            self._last = values[-1] if values else '2026-03-30T00:00:00Z'
+
+        def __call__(self) -> str:
+            if self._index < len(self._values):
+                self._last = self._values[self._index]
+                self._index += 1
+            return self._last
+
+    provider_catalog = build_default_provider_catalog()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=SilentExecutionService(),
+        completion_tracker=CompletionTrackerService(config, provider_catalog, request_timeout_s=0.0),
+        provider_catalog=provider_catalog,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+    heartbeats = JobHeartbeatService(
+        layout,
+        policy=HeartbeatPolicy(silence_start_after_s=600.0, repeat_interval_s=600.0),
+        store=HeartbeatStateStore(layout),
+        clock=StepClock(
+            '2026-03-30T00:10:00Z',
+            '2026-03-30T00:20:00Z',
+            '2026-03-30T00:30:00Z',
+        ),
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='long running task',
+            task_id='task-job-heartbeat-timeout',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    message = MessageStore(layout).list_all()[-1]
+    job_id = receipt.jobs[0].job_id
+    heartbeat_path = layout.heartbeat_subject_path('job_progress', job_id)
+
+    assert dispatcher.tick()[0].job_id == job_id
+
+    heartbeats.tick(dispatcher)
+    heartbeats.tick(dispatcher)
+    assert ReplyStore(layout).list_message(message.message_id) == []
+    assert dispatcher.get(job_id).status is JobStatus.RUNNING
+
+    heartbeats.tick(dispatcher)
+
+    replies = ReplyStore(layout).list_message(message.message_id)
+    assert len(replies) == 1
+    assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
+    assert replies[0].diagnostics['reason'] == 'heartbeat_timeout'
+    assert 'Task stopped after 3 no-progress heartbeat intervals' in replies[0].reply
+    assert 'send a small communication test' in replies[0].reply
+    assert dispatcher.get(job_id).status is JobStatus.INCOMPLETE
+    assert MessageStore(layout).list_all()[-1].message_state is MessageState.INCOMPLETE
     assert heartbeat_path.exists() is False
 
 

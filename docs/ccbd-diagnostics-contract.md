@@ -131,6 +131,7 @@ Rules:
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
 - `heartbeats/<subject-kind>/*.json` records non-lease heartbeat state for long-lived supervised subjects such as running jobs; these files are diagnostics/evidence, not backend ownership authority
+- running-job heartbeat observations stay in diagnostics/events and must not be emitted as caller-visible mailbox replies; after three consecutive no-progress observations, the terminal `heartbeat_timeout` reply is the caller-visible outcome
 - daemon lease heartbeat and subject heartbeat must remain separate concepts and separate files
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available

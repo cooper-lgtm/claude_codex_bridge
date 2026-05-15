@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ccbd.api_models import JobRecord
+from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 
 
 def heartbeat_notice_body(job: JobRecord, *, decision, snapshot) -> str:
@@ -19,6 +20,39 @@ def heartbeat_notice_body(job: JobRecord, *, decision, snapshot) -> str:
     if preview:
         lines.extend(['', preview])
     return '\n'.join(lines).rstrip()
+
+
+def heartbeat_timeout_body(job: JobRecord, *, decision) -> str:
+    return (
+        f"Task stopped after {decision.notice_count} no-progress heartbeat intervals for "
+        f"{job.agent_name} (job={job.job_id}). The target agent accepted the task but "
+        "produced no reliable progress or completion signal. Before sending another "
+        "large task, send a small communication test to this agent first."
+    )
+
+
+def heartbeat_timeout_decision(job: JobRecord, *, decision, snapshot, finished_at: str) -> CompletionDecision:
+    prior_state = getattr(snapshot, 'state', None)
+    source_cursor = getattr(prior_state, 'latest_cursor', None)
+    return CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.INCOMPLETE,
+        reason='heartbeat_timeout',
+        confidence=CompletionConfidence.DEGRADED,
+        reply=heartbeat_timeout_body(job, decision=decision),
+        anchor_seen=bool(getattr(prior_state, 'anchor_seen', False)),
+        reply_started=bool(getattr(prior_state, 'reply_started', False)),
+        reply_stable=bool(getattr(prior_state, 'reply_stable', False)),
+        provider_turn_ref=str(getattr(prior_state, 'provider_turn_ref', '') or job.job_id),
+        source_cursor=source_cursor,
+        finished_at=finished_at,
+        diagnostics={
+            'heartbeat_timeout': True,
+            'heartbeat_notice_count': decision.notice_count,
+            'heartbeat_silence_seconds': round(float(decision.silence_seconds), 3),
+            'last_progress_at': decision.last_progress_at,
+        },
+    )
 
 
 def heartbeat_diagnostics(
@@ -80,6 +114,8 @@ __all__ = [
     'format_silence',
     'heartbeat_diagnostics',
     'heartbeat_notice_body',
+    'heartbeat_timeout_body',
+    'heartbeat_timeout_decision',
     'snapshot_is_terminal',
     'snapshot_preview',
 ]

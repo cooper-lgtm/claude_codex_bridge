@@ -298,6 +298,12 @@ New hard rule:
 - a managed pane-backed submission may not remain active indefinitely after `no_terminal_timeout_s` without valid primary authority
 
 When that deadline is exceeded, the monitor must produce a terminal decision.
+Provider-native cursor movement, polling timestamps, rescan offsets, and other
+reader bookkeeping are not progress evidence and must not extend the deadline.
+Only semantic evidence such as request anchor observation, assistant reply text,
+terminal artifacts, or provider turn binding should refresh progress.
+Session snapshot/rotation bookkeeping is observable state, but it is not
+completion progress by itself.
 
 Default degraded closure:
 
@@ -306,6 +312,12 @@ Default degraded closure:
 - `confidence = degraded`
 
 If a provider-specific secondary source supports extracting a best-effort reply safely, that reply may be attached with clear degraded diagnostics.
+
+Running-job heartbeat is a separate no-progress guard:
+
+- heartbeat observations remain internal diagnostics/events rather than caller-visible replies
+- after three consecutive heartbeat intervals without progress, the job must terminalize once with `status = incomplete`, `reason = heartbeat_timeout`, and a caller-facing recommendation to send a small communication test before another large task
+- a real terminal provider reply before that threshold remains the only normal caller-facing reply
 
 ## 8. New Boundary: Runtime Artifact Layout Contract
 

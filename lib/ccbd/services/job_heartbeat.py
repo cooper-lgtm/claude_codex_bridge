@@ -13,6 +13,7 @@ from .job_heartbeat_runtime import (
 
 _DEFAULT_SUBJECT_KIND = 'job_progress'
 _TRACKED_MESSAGE_TYPES = frozenset({'ask'})
+_DEFAULT_TERMINAL_NOTICE_COUNT = 3
 
 
 class JobHeartbeatService:
@@ -24,6 +25,7 @@ class JobHeartbeatService:
         store: HeartbeatStateStore | None = None,
         clock=utc_now,
         subject_kind: str = _DEFAULT_SUBJECT_KIND,
+        terminal_notice_count: int | None = _DEFAULT_TERMINAL_NOTICE_COUNT,
     ) -> None:
         self._layout = layout
         self._policy = policy
@@ -33,6 +35,11 @@ class JobHeartbeatService:
             str(subject_kind or _DEFAULT_SUBJECT_KIND).strip() or _DEFAULT_SUBJECT_KIND
         )
         self._tracked_message_types = _TRACKED_MESSAGE_TYPES
+        self._terminal_notice_count = (
+            int(terminal_notice_count)
+            if terminal_notice_count is not None and int(terminal_notice_count) > 0
+            else None
+        )
 
     def tick(self, dispatcher) -> tuple[str, ...]:
         active_job_ids: set[str] = set()

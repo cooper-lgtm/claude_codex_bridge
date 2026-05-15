@@ -4,10 +4,26 @@ from dataclasses import replace
 from datetime import timedelta
 
 from ccbd.system import parse_utc_timestamp
-from completion.models import CompletionDecision
+from completion.models import CompletionDecision, CompletionItemKind
 from provider_execution.base import ProviderPollResult, ProviderSubmission
 from provider_execution.common import request_anchor_from_runtime_state
 from provider_execution.reliability import adapter_reliability_policy
+
+_SEMANTIC_PROGRESS_ITEM_KINDS = frozenset(
+    {
+        CompletionItemKind.ANCHOR_SEEN,
+        CompletionItemKind.ASSISTANT_CHUNK,
+        CompletionItemKind.ASSISTANT_FINAL,
+        CompletionItemKind.TOOL_CALL,
+        CompletionItemKind.TOOL_RESULT,
+        CompletionItemKind.RESULT,
+        CompletionItemKind.TURN_BOUNDARY,
+        CompletionItemKind.TURN_ABORTED,
+        CompletionItemKind.CANCEL_INFO,
+        CompletionItemKind.ERROR,
+        CompletionItemKind.PANE_DEAD,
+    }
+)
 
 
 def apply_reliability_progress(
@@ -34,9 +50,33 @@ def has_reliability_progress(
     previous_submission: ProviderSubmission,
 ) -> bool:
     return bool(
-        result.items
+        has_semantic_progress_item(result)
         or result.decision is not None
-        or result.submission != previous_submission
+        or semantic_progress_marker(result.submission)
+        != semantic_progress_marker(previous_submission)
+    )
+
+
+def has_semantic_progress_item(result: ProviderPollResult) -> bool:
+    return any(item.kind in _SEMANTIC_PROGRESS_ITEM_KINDS for item in result.items)
+
+
+def semantic_progress_marker(submission: ProviderSubmission) -> tuple[object, ...]:
+    runtime_state = dict(submission.runtime_state)
+    return (
+        submission.reply,
+        submission.status,
+        submission.reason,
+        submission.confidence,
+        bool(runtime_state.get('anchor_seen') or runtime_state.get('anchor_emitted')),
+        str(runtime_state.get('bound_turn_id') or ''),
+        str(runtime_state.get('bound_task_id') or ''),
+        str(runtime_state.get('reply_buffer') or ''),
+        str(runtime_state.get('last_agent_message') or ''),
+        str(runtime_state.get('last_final_answer') or ''),
+        str(runtime_state.get('last_assistant_message') or ''),
+        str(runtime_state.get('last_assistant_signature') or ''),
+        str(runtime_state.get('session_path') or ''),
     )
 
 
@@ -174,7 +214,9 @@ __all__ = [
     'build_timeout_result',
     'deadline_at',
     'has_reliability_progress',
+    'has_semantic_progress_item',
     'last_progress_timestamp',
+    'semantic_progress_marker',
     'timeout_elapsed',
     'timeout_poll_result',
     'timeout_policy_for',

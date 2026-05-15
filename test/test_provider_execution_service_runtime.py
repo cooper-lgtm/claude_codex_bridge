@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from completion.models import (
@@ -11,8 +12,9 @@ from completion.models import (
     CompletionSourceKind,
     CompletionStatus,
 )
-from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
+from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.reliability import CompletionReliabilityPolicy
+from provider_execution.service_runtime.persistence import persist_submission
 from provider_execution.service_runtime.polling import poll_updates
 from provider_execution.service_runtime.restore import restore_submission
 from provider_execution.state_models import PersistedExecutionState
@@ -47,9 +49,9 @@ def _decision(*, reply: str = "done") -> CompletionDecision:
     )
 
 
-def _item(seq: int = 1) -> CompletionItem:
+def _item(seq: int = 1, *, kind: CompletionItemKind = CompletionItemKind.RESULT) -> CompletionItem:
     return CompletionItem(
-        kind=CompletionItemKind.RESULT,
+        kind=kind,
         timestamp="2026-04-06T00:00:01Z",
         cursor=CompletionCursor(source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM, event_seq=seq),
         provider="fake",
@@ -160,6 +162,202 @@ def test_poll_updates_terminalizes_reliability_timeout(monkeypatch) -> None:
     assert captured["submission"].diagnostics["completion_fallback_source"] == "execution_reliability_monitor"
     assert service._active == {}
     assert service._runtime_contexts == {}
+
+
+def test_poll_updates_terminalizes_timeout_when_poll_only_advances_cursor(monkeypatch) -> None:
+    submission = _submission(provider="codex")
+
+    def _poll(current, now):
+        del now
+        updated = replace(
+            current,
+            runtime_state={
+                **current.runtime_state,
+                "state": {"offset": 42, "last_rescan": 123.0},
+            },
+        )
+        return ProviderPollResult(submission=updated)
+
+    adapter = SimpleNamespace(
+        poll=_poll,
+        completion_reliability_policy=CompletionReliabilityPolicy(
+            provider="codex",
+            primary_authority="protocol_log",
+            no_terminal_timeout_s=900.0,
+        ),
+    )
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:15:01Z",
+        _pending_replays={},
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _registry={"codex": adapter},
+    )
+    captured: dict[str, object] = {}
+
+    def _persist(service, job_id, pending_decision=None, pending_items=()):
+        captured["job_id"] = job_id
+        captured["decision"] = pending_decision
+        captured["items"] = pending_items
+        captured["submission"] = service._active.get(job_id)
+
+    monkeypatch.setattr(
+        "provider_execution.service_runtime.polling.persist_submission",
+        _persist,
+    )
+
+    updates = poll_updates(service)
+
+    assert len(updates) == 1
+    assert updates[0].decision is not None
+    assert updates[0].decision.reason == "completion_timeout"
+    assert updates[0].decision.anchor_seen is False
+    assert captured["submission"].runtime_state["state"] == {"offset": 42, "last_rescan": 123.0}
+    assert service._active == {}
+    assert service._runtime_contexts == {}
+
+
+def test_poll_updates_terminalizes_timeout_when_poll_only_emits_session_bookkeeping(monkeypatch) -> None:
+    submission = _submission(provider="codex")
+
+    def _poll(current, now):
+        del now
+        updated = replace(
+            current,
+            runtime_state={
+                **current.runtime_state,
+                "state": {"offset": 42, "last_rescan": 123.0},
+            },
+        )
+        return ProviderPollResult(
+            submission=updated,
+            items=(_item(kind=CompletionItemKind.SESSION_ROTATE),),
+        )
+
+    adapter = SimpleNamespace(
+        poll=_poll,
+        completion_reliability_policy=CompletionReliabilityPolicy(
+            provider="codex",
+            primary_authority="protocol_log",
+            no_terminal_timeout_s=900.0,
+        ),
+    )
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:15:01Z",
+        _pending_replays={},
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _registry={"codex": adapter},
+    )
+    captured: dict[str, object] = {}
+
+    def _persist(service, job_id, pending_decision=None, pending_items=()):
+        captured["job_id"] = job_id
+        captured["decision"] = pending_decision
+        captured["items"] = pending_items
+
+    monkeypatch.setattr(
+        "provider_execution.service_runtime.polling.persist_submission",
+        _persist,
+    )
+
+    updates = poll_updates(service)
+
+    assert len(updates) == 1
+    assert updates[0].decision is not None
+    assert updates[0].decision.reason == "completion_timeout"
+    assert captured["decision"] is updates[0].decision
+    assert captured["items"] == ()
+    assert service._active == {}
+    assert service._runtime_contexts == {}
+
+
+def test_reliability_progress_ignores_cursor_noise_but_tracks_anchor(monkeypatch) -> None:
+    submission = _submission(provider="codex")
+    calls = iter(
+        [
+            ProviderPollResult(
+                submission=replace(
+                    submission,
+                    runtime_state={
+                        **submission.runtime_state,
+                        "state": {"offset": 42, "last_rescan": 123.0},
+                    },
+                )
+            ),
+            ProviderPollResult(
+                submission=replace(
+                    submission,
+                    runtime_state={
+                        **submission.runtime_state,
+                        "anchor_seen": True,
+                        "state": {"offset": 84, "last_rescan": 456.0},
+                    },
+                )
+            ),
+        ]
+    )
+    adapter = SimpleNamespace(
+        poll=lambda current, now: next(calls),
+        completion_reliability_policy=CompletionReliabilityPolicy(
+            provider="codex",
+            primary_authority="protocol_log",
+            no_terminal_timeout_s=900.0,
+        ),
+    )
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:00:10Z",
+        _pending_replays={},
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _registry={"codex": adapter},
+    )
+    monkeypatch.setattr(
+        "provider_execution.service_runtime.polling.persist_submission",
+        lambda service, job_id, pending_decision=None, pending_items=(): None,
+    )
+
+    assert poll_updates(service) == ()
+    assert "reliability_last_progress_at" not in service._active["job_1"].runtime_state
+
+    assert poll_updates(service) == ()
+    assert service._active["job_1"].runtime_state["reliability_last_progress_at"] == "2026-04-06T00:00:10Z"
+
+
+def test_persist_submission_preserves_reliability_progress_state() -> None:
+    saved: list[PersistedExecutionState] = []
+    submission = replace(
+        _submission(provider="codex"),
+        runtime_state={
+            "mode": "active",
+            "state": {"offset": 42},
+            "reliability_last_progress_at": "2026-04-06T00:02:00Z",
+            "reliability_timeout_deadline_at": "2026-04-06T00:17:00Z",
+        },
+    )
+    service = SimpleNamespace(
+        _clock=lambda: "2026-04-06T00:03:00Z",
+        _active={"job_1": submission},
+        _runtime_contexts={"job_1": _runtime_context()},
+        _state_store=SimpleNamespace(save=lambda state: saved.append(state)),
+        _registry={
+            "codex": SimpleNamespace(
+                export_runtime_state=lambda current: {
+                    "mode": current.runtime_state.get("mode"),
+                    "state": current.runtime_state.get("state"),
+                }
+            )
+        },
+    )
+
+    persist_submission(service, "job_1")
+
+    assert len(saved) == 1
+    runtime_state = saved[0].submission.runtime_state
+    assert runtime_state["mode"] == "active"
+    assert runtime_state["state"] == {"offset": 42}
+    assert runtime_state["reliability_last_progress_at"] == "2026-04-06T00:02:00Z"
+    assert runtime_state["reliability_timeout_deadline_at"] == "2026-04-06T00:17:00Z"
 
 
 def test_restore_submission_returns_terminal_pending_without_resume() -> None:

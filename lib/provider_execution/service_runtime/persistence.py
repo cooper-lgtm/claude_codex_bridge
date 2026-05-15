@@ -71,6 +71,7 @@ def persist_submission(
             if exported is not None:
                 runtime_state = dict(exported)
                 resume_capable = callable(getattr(adapter, "resume", None))
+    runtime_state = with_reliability_state(runtime_state, submission.runtime_state)
     persisted = PersistedExecutionState(
         submission=ProviderSubmission(
             job_id=submission.job_id,
@@ -96,6 +97,17 @@ def persist_submission(
     service._state_store.save(persisted)
 
 
+def with_reliability_state(runtime_state: dict[str, object], source_state: dict[str, object]) -> dict[str, object]:
+    reliability_state = {
+        key: value
+        for key, value in dict(source_state).items()
+        if str(key).startswith('reliability_')
+    }
+    if not reliability_state:
+        return runtime_state
+    return {**runtime_state, **reliability_state}
+
+
 def filter_pending_items(persisted: PersistedExecutionState) -> tuple:
     if not persisted.pending_items or not persisted.applied_event_seqs:
         return tuple(persisted.pending_items)
@@ -108,4 +120,5 @@ __all__ = [
     "acknowledge_item",
     "filter_pending_items",
     "persist_submission",
+    "with_reliability_state",
 ]

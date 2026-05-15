@@ -3,7 +3,7 @@ from __future__ import annotations
 from heartbeat import HeartbeatAction, evaluate_heartbeat
 from mailbox_runtime.targets import known_mailbox_targets, normalize_mailbox_target
 
-from .common import heartbeat_diagnostics, heartbeat_notice_body, snapshot_is_terminal
+from .common import heartbeat_diagnostics, heartbeat_timeout_decision, snapshot_is_terminal
 from .models import HeartbeatTickContext
 
 
@@ -15,7 +15,9 @@ def tick_job_heartbeat(service, dispatcher, job) -> bool:
         return handle_reset_heartbeat(service, dispatcher, job, context)
     if not context.decision.notice_due:
         return True
-    return deliver_heartbeat_notice(service, dispatcher, job, context)
+    if heartbeat_timeout_due(service, context):
+        return terminalize_heartbeat_timeout(service, dispatcher, job, context)
+    return record_internal_heartbeat(service, dispatcher, job, context)
 
 
 def build_heartbeat_tick_context(service, dispatcher, job) -> HeartbeatTickContext | None:
@@ -66,7 +68,12 @@ def handle_reset_heartbeat(service, dispatcher, job, context: HeartbeatTickConte
     return True
 
 
-def deliver_heartbeat_notice(service, dispatcher, job, context: HeartbeatTickContext) -> bool:
+def heartbeat_timeout_due(service, context: HeartbeatTickContext) -> bool:
+    limit = getattr(service, '_terminal_notice_count', None)
+    return limit is not None and int(context.decision.notice_count) >= int(limit)
+
+
+def record_internal_heartbeat(service, dispatcher, job, context: HeartbeatTickContext) -> bool:
     mailbox_target = normalize_mailbox_target(
         job.request.from_actor,
         known_targets=known_mailbox_targets(dispatcher._config),
@@ -78,43 +85,52 @@ def deliver_heartbeat_notice(service, dispatcher, job, context: HeartbeatTickCon
         mailbox_target=mailbox_target,
         subject_kind=service._subject_kind,
     )
-    if dispatcher._message_bureau is None or mailbox_target is None:
-        service._store.save(context.next_state)
-        dispatcher._append_event(
-            job,
-            'job_heartbeat_skipped_no_mailbox',
-            diagnostics,
-            timestamp=context.now,
-        )
-        return True
-
-    reply_id = dispatcher._message_bureau.record_notice(
-        job,
-        reply=heartbeat_notice_body(
-            job,
-            decision=context.decision,
-            snapshot=context.snapshot,
-        ),
-        diagnostics=diagnostics,
-        finished_at=context.now,
-        deliver_to_actor=mailbox_target,
-    )
     service._store.save(context.next_state)
     dispatcher._append_event(
         job,
-        'job_heartbeat_notice_sent',
-        {
-            **diagnostics,
-            'reply_id': reply_id,
-        },
+        'job_heartbeat_observed',
+        diagnostics,
         timestamp=context.now,
     )
     return True
 
 
+def terminalize_heartbeat_timeout(service, dispatcher, job, context: HeartbeatTickContext) -> bool:
+    diagnostics = heartbeat_diagnostics(
+        job,
+        decision=context.decision,
+        snapshot=context.snapshot,
+        mailbox_target=normalize_mailbox_target(
+            job.request.from_actor,
+            known_targets=known_mailbox_targets(dispatcher._config),
+        ),
+        subject_kind=service._subject_kind,
+    )
+    service._store.save(context.next_state)
+    dispatcher._append_event(
+        job,
+        'job_heartbeat_timeout',
+        diagnostics,
+        timestamp=context.now,
+    )
+    dispatcher.complete(
+        job.job_id,
+        heartbeat_timeout_decision(
+            job,
+            decision=context.decision,
+            snapshot=context.snapshot,
+            finished_at=context.now,
+        ),
+    )
+    service._store.remove(service._subject_kind, job.job_id)
+    return False
+
+
 __all__ = [
     'build_heartbeat_tick_context',
-    'deliver_heartbeat_notice',
+    'heartbeat_timeout_due',
     'handle_reset_heartbeat',
+    'record_internal_heartbeat',
+    'terminalize_heartbeat_timeout',
     'tick_job_heartbeat',
 ]
