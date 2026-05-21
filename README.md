@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.2.7-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.2.8-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -74,9 +74,9 @@ Build project-local teams with roles, pane layout, provider state, worktree isol
 <details>
 <summary><b>Latest release highlights</b></summary>
 
-- **Config sources are explicit**: CCB now reports whether the effective config came from the built-in default, user `~/.ccb/ccb.config`, or project `.ccb/ccb.config`.
-- **`ccb config validate` shows the active layer**: validation output now includes `config_source_kind` and `used_builtin_default`, and docs/`ccb_config` guidance match the three-layer precedence.
+- **Config sources are explicit**: CCB reports whether the effective config came from the built-in default, user `~/.ccb/ccb.config`, or project `.ccb/ccb.config`.
 - **`ccb kill` cleanup is ordered after the response**: project tmux namespace destruction is deferred until after `stop_all` finalization, so cleanup completes even when kill is launched from a CCB tmux pane.
+- **Managed tmux stays isolated but usable**: CCB now explicitly enables owned `mouse on` and `set-clipboard on` policy in project namespaces and detached tmux paths.
 
 See [Release Notes](#release-notes) for the full history.
 
@@ -338,6 +338,15 @@ Thanks to the [Linux.do community](https://linux.do) for testing, feedback, and 
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.2.8</b> - Config Source, Stop Cleanup, And Tmux Policy Release</summary>
+
+- Includes explicit config source kinds for built-in defaults, user `~/.ccb/ccb.config`, and project `.ccb/ccb.config`, with project config taking highest priority.
+- Keeps project tmux namespace destruction deferred until after the stop-all response finalizer so `ccb kill` / `ccb kill -f` can complete cleanup from inside a CCB pane.
+- Keeps managed tmux config isolated while explicitly enabling CCB-owned mouse and clipboard support in project namespaces and detached tmux paths.
+
+</details>
+
+<details>
 <summary><b>v6.2.7</b> - Config Source And Stop Cleanup Release</summary>
 
 - Reports explicit config source kinds for built-in defaults, user `~/.ccb/ccb.config`, and project `.ccb/ccb.config`, with project config taking highest priority.

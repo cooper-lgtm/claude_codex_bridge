@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.2.7-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.2.8-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -74,9 +74,9 @@
 <details>
 <summary><b>最新版本亮点</b></summary>
 
-- **配置来源显式化**：CCB 现在会报告当前配置来自内置默认、用户 `~/.ccb/ccb.config`，还是项目 `.ccb/ccb.config`。
-- **`ccb config validate` 显示生效层级**：validate 输出新增 `config_source_kind` 和 `used_builtin_default`，README/docs/`ccb_config` 说明也对齐三层优先级。
+- **配置来源显式化**：CCB 会报告当前配置来自内置默认、用户 `~/.ccb/ccb.config`，还是项目 `.ccb/ccb.config`。
 - **`ccb kill` 清理顺序修复**：project tmux namespace destroy 延后到 `stop_all` 回包后的 finalize 阶段，避免从 CCB tmux pane 执行 kill 时清理只跑一半。
+- **Managed tmux 继续隔离但保留可用性**：CCB 在 project namespace 和 detached tmux 路径中显式启用自有 `mouse on` 与 `set-clipboard on` policy。
 
 完整历史见 [新版本记录](#新版本记录)。
 
@@ -329,6 +329,15 @@ ccb reinstall
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.2.8</b> - Config Source, Stop Cleanup, And Tmux Policy Release</summary>
+
+- 包含显式配置来源：内置默认、用户 `~/.ccb/ccb.config`、项目 `.ccb/ccb.config`，并保持项目配置优先级最高。
+- 继续将 project tmux namespace destroy 延后到 stop-all response finalizer 之后，让从 CCB pane 执行的 `ccb kill` / `ccb kill -f` 能完成后台清理。
+- 保持 managed tmux 配置隔离，同时在 project namespace 和 detached tmux 路径中显式启用 CCB-owned mouse/clipboard support。
+
+</details>
+
+<details>
 <summary><b>v6.2.7</b> - Config Source And Stop Cleanup Release</summary>
 
 - 显式报告配置来源：内置默认、用户 `~/.ccb/ccb.config`、项目 `.ccb/ccb.config`，并保持项目配置优先级最高。

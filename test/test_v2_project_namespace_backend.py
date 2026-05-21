@@ -45,7 +45,7 @@ class _FlakyBackend:
                 stdout='',
                 stderr='no server running on /tmp/ccb-runtime/test.sock\n',
             )
-        if key == ('set-option', '-g', 'destroy-unattached', 'off') and self.require_session_for_server_policy and not self.session_created:
+        if key[:2] == ('set-option', '-g') and self.require_session_for_server_policy and not self.session_created:
             return subprocess.CompletedProcess(
                 ['tmux', *key],
                 1,
@@ -106,6 +106,8 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
 
     assert backend.calls.count(('start-server',)) == 2
     assert backend.calls.count(('set-option', '-g', 'destroy-unattached', 'off')) == 2
+    assert backend.calls.count(('set-option', '-g', 'mouse', 'on')) == 1
+    assert backend.calls.count(('set-option', '-g', 'set-clipboard', 'on')) == 1
     assert backend.calls.count(
         (
             'new-session',
@@ -147,7 +149,13 @@ def test_prepare_server_does_not_require_server_policy_before_session_exists(mon
 
     assert backend.calls[0] == ('start-server',)
     assert ('set-option', '-g', 'destroy-unattached', 'off') not in backend.calls[:2]
-    assert backend.calls[-1] == ('set-option', '-g', 'destroy-unattached', 'off')
+    assert ('set-option', '-g', 'mouse', 'on') not in backend.calls[:2]
+    assert ('set-option', '-g', 'set-clipboard', 'on') not in backend.calls[:2]
+    assert backend.calls[-3:] == [
+        ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'mouse', 'on'),
+        ('set-option', '-g', 'set-clipboard', 'on'),
+    ]
 
 
 def test_list_windows_retries_transient_tmux_failures(monkeypatch) -> None:
@@ -304,7 +312,11 @@ def test_ensure_server_policy_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     ensure_server_policy(backend, timeout_s=0.0)
 
-    assert backend.calls == [('set-option', '-g', 'destroy-unattached', 'off')]
+    assert backend.calls == [
+        ('set-option', '-g', 'destroy-unattached', 'off'),
+        ('set-option', '-g', 'mouse', 'on'),
+        ('set-option', '-g', 'set-clipboard', 'on'),
+    ]
 
 
 def test_kill_window_accepts_fast_probe_timeout(monkeypatch) -> None:

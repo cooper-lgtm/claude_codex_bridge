@@ -1057,7 +1057,7 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:2] == ['new-session', '-d']:
@@ -1085,6 +1085,8 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
     assert result.binding.runtime_ref == 'tmux:%88'
     assert any(name == 'start-server' for name, _ in calls)
     assert any(name == 'set-option' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 
@@ -1209,7 +1211,7 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:2] == ['new-session', '-d']:
@@ -1250,6 +1252,8 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
     assert result.binding.runtime_ref == 'tmux:%88'
     assert ('kill', ('sock-dead', '%44')) in calls
     assert any(name == 'start-server' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 
@@ -1427,7 +1431,7 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:4] == ['new-session', '-d', '-x', '160']:
@@ -1456,6 +1460,8 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert ('kill', ('%42',)) in calls
     assert any(name == 'start-server' for name, _ in calls)
     assert any(name == 'set-option' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 

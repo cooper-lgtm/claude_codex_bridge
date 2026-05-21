@@ -102,6 +102,8 @@ def detached_pane(
 def prepare_detached_tmux_server(backend) -> None:
     best_effort_tmux_run(backend, ['start-server'])
     best_effort_tmux_run(backend, ['set-option', '-g', 'destroy-unattached', 'off'])
+    best_effort_tmux_run(backend, ['set-option', '-g', 'mouse', 'on'])
+    best_effort_tmux_run(backend, ['set-option', '-g', 'set-clipboard', 'on'])
 
 
 def best_effort_tmux_run(backend, argv: list[str]) -> None:

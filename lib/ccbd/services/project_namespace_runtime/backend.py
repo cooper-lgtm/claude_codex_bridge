@@ -48,6 +48,20 @@ def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
         failure_message='failed to persist tmux destroy-unattached policy',
         timeout_s=timeout_s,
     )
+    _apply_optional_server_policy(backend, option='mouse', value='on', timeout_s=timeout_s)
+    _apply_optional_server_policy(backend, option='set-clipboard', value='on', timeout_s=timeout_s)
+
+
+def _apply_optional_server_policy(backend, *, option: str, value: str, timeout_s: float | None = None) -> None:
+    try:
+        _tmux_run_ready(
+            backend,
+            ['set-option', '-g', option, value],
+            failure_message=f'failed to persist tmux {option} policy',
+            timeout_s=timeout_s,
+        )
+    except Exception:
+        return
 
 
 def create_session(

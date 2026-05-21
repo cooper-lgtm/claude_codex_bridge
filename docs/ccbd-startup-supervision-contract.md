@@ -101,6 +101,9 @@ Out of scope:
 - Startup, supervision, and shutdown must be reasoned per project anchor, never globally.
 - CCB-managed tmux servers must be started with an isolated tmux config so user-level
   tmux plugins, hooks, and global options cannot alter project pane topology.
+- Any tmux behavior CCB depends on after config isolation, including mouse and
+  clipboard support, must be applied as CCB-owned server policy rather than
+  inherited from user `.tmux.conf`.
 
 ### 5.2 One Authoritative Backend
 
@@ -419,7 +422,7 @@ Project namespace compatibility:
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
   - `prepare_server` warms the server boundary only
-  - server-global options that require a live session, such as `destroy-unattached off`, must be applied only after the authoritative project session exists
+  - server-global options that require a live session, such as `destroy-unattached off`, CCB-managed `mouse on`, and CCB-managed `set-clipboard on`, must be applied only after the authoritative project session exists
 - project-owned pane mutation commands, including `respawn-pane` used by `cmd` bootstrap and pane-backed runtime launch/relaunch, must use the same shared tmux ready-retry budget as namespace create/reflow rather than a separate shorter timeout
 - namespace session liveness on the project-owned tmux socket must treat both `can't find session` and `no server running on <project socket>` as "namespace absent" for create/recreate decisions; startup must not fail that path as a generic tmux inspect error
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers

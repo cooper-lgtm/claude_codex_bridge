@@ -145,7 +145,7 @@ class _FakeTmuxBackend:
         self.tmux_calls.append((list(args), capture))
         if args[:1] == ['start-server']:
             return SimpleNamespace(returncode=0, stdout='', stderr='')
-        if args[:3] == ['set-option', '-g', 'destroy-unattached']:
+        if args[:2] == ['set-option', '-g']:
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         if len(args) >= 3 and args[:2] == ['has-session', '-t']:
             return SimpleNamespace(returncode=0 if args[2] in self.sessions else 1, stdout='', stderr='')
@@ -296,6 +296,27 @@ def test_project_namespace_controller_creates_state_and_lifecycle_event(tmp_path
     assert latest_event.event_kind == 'namespace_created'
     assert latest_event.details['recreated'] is False
     assert latest_event.details['reason'] == 'initial_create'
+
+
+def test_project_namespace_controller_applies_server_policy_when_reusing_session(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reuse-policy'
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-reuse-policy',
+        clock=lambda: '2026-04-03T02:30:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+
+    controller.ensure()
+    backend.tmux_calls.clear()
+    namespace = controller.ensure()
+
+    assert namespace.created_this_call is False
+    assert (['set-option', '-g', 'destroy-unattached', 'off'], True) in backend.tmux_calls
+    assert (['set-option', '-g', 'mouse', 'on'], True) in backend.tmux_calls
+    assert (['set-option', '-g', 'set-clipboard', 'on'], True) in backend.tmux_calls
 
 
 def test_prepare_server_preserves_tmux_failure_detail_for_diagnostics(tmp_path: Path) -> None:
@@ -656,4 +677,6 @@ def test_project_namespace_controller_uses_silent_server_commands(tmp_path: Path
     assert new_session_calls[0][-3:] == ['sh', '-lc', 'while :; do sleep 3600; done']
     assert (['start-server'], True) in backend.tmux_calls
     assert (['set-option', '-g', 'destroy-unattached', 'off'], True) in backend.tmux_calls
+    assert (['set-option', '-g', 'mouse', 'on'], True) in backend.tmux_calls
+    assert (['set-option', '-g', 'set-clipboard', 'on'], True) in backend.tmux_calls
     assert (['kill-server'], True) in backend.tmux_calls

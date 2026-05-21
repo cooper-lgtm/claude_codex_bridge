@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v6.2.8 (2026-05-21)
+
+### Config Source, Stop Cleanup, And Tmux Policy Release
+
+- **Config Source Fixes Included**: the current release package includes explicit config source kinds for built-in defaults, user `~/.ccb/ccb.config`, and project `.ccb/ccb.config`, with project config taking highest priority.
+- **Kill Cleanup Ordering Included**: `stop_all` defers project tmux namespace destruction until after the socket response finalizer so `ccb kill` and `ccb kill -f` can complete cleanup from inside a CCB pane.
+- **Managed Tmux Policy Follow-Up Added**: isolated managed tmux sessions now explicitly enable CCB-owned `mouse on` and `set-clipboard on` policy in project namespaces and detached tmux paths.
+
 ## v6.2.7 (2026-05-21)
 
 ### Config Source And Stop Cleanup Release
