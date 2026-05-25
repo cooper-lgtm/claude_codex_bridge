@@ -538,6 +538,14 @@ Project-namespace reflow safety rules:
 - only reflow when no other configured agent is currently `BUSY`
 - if reflow is not safe, fall back to local provider recovery rather than disrupting unrelated work
 
+Manual pane restart:
+
+- an explicit user-triggered project pane restart is not ordinary pane-death recovery; while the project namespace is healthy, it must respawn configured agent panes in place and preserve the attached tmux session
+- namespace recreation is an escalation fallback only when the current project namespace is no longer a trustworthy repair boundary
+- the restart target set is all configured agents from `.ccb/ccb.config`, not only the currently focused or default subset
+- the restart must inherit restore and auto-permission choices from the persisted project start policy
+- when requested from a sidebar pane, the sidebar must remain attached while the daemon restarts agent panes
+
 Project-socket cleanup rules:
 
 - startup must compute the authoritative active pane set for the current project-owned tmux socket

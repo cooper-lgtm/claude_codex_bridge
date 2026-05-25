@@ -24,7 +24,8 @@ impl CcbdClient {
 
     pub fn project_view(&self) -> Result<ProjectViewResponse, String> {
         let payload = self.request("project_view", json!({"schema_version": 1}))?;
-        serde_json::from_value(payload).map_err(|err| format!("invalid project_view response: {err}"))
+        serde_json::from_value(payload)
+            .map_err(|err| format!("invalid project_view response: {err}"))
     }
 
     pub fn focus_window(&self, window: &str, namespace_epoch: Option<u64>) -> Result<(), String> {
@@ -60,12 +61,17 @@ impl CcbdClient {
     }
 
     pub fn cancel(&self, job_id: &str) -> Result<(), String> {
-        self.request("cancel", json!({"job_id": job_id})).map(|_| ())
+        self.request("cancel", json!({"job_id": job_id}))
+            .map(|_| ())
     }
 
     pub fn dismiss_comms(&self, comms_id: &str) -> Result<(), String> {
         self.request("project_view_dismiss_comms", json!({"id": comms_id}))
             .map(|_| ())
+    }
+
+    pub fn restart_panes(&self) -> Result<(), String> {
+        self.request("project_restart_panes", json!({})).map(|_| ())
     }
 
     fn request(&self, op: &str, request: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -218,7 +224,9 @@ mod tests {
         });
         let client = CcbdClient::new(socket_path);
 
-        client.comms_recover("job1", None, Some("provider_prompt_idle")).unwrap();
+        client
+            .comms_recover("job1", None, Some("provider_prompt_idle"))
+            .unwrap();
         handle.join().unwrap();
     }
 
@@ -245,6 +253,19 @@ mod tests {
         let client = CcbdClient::new(socket_path);
 
         client.dismiss_comms("job1").unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn restart_panes_sends_project_restart_request() {
+        let (socket_path, handle) = spawn_one_response_server(|request| {
+            assert_eq!(request["op"], "project_restart_panes");
+            assert_eq!(request["request"], json!({}));
+            json!({"api_version": 2, "ok": true, "status": "scheduled"})
+        });
+        let client = CcbdClient::new(socket_path);
+
+        client.restart_panes().unwrap();
         handle.join().unwrap();
     }
 

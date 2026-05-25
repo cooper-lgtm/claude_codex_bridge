@@ -60,10 +60,12 @@ class _FakeTmuxBackend:
     active_windows: dict[str, str] = field(default_factory=dict)
     pane_titles: dict[str, str] = field(default_factory=dict)
     pane_options: dict[str, dict[str, str]] = field(default_factory=dict)
+    pane_widths: dict[str, int] = field(default_factory=dict)
     session_options: dict[str, dict[str, str]] = field(default_factory=dict)
     window_options: dict[str, dict[str, str]] = field(default_factory=dict)
     hooks: dict[str, dict[str, str]] = field(default_factory=dict)
     split_calls: list[tuple[str, str, int]] = field(default_factory=list)
+    resize_calls: list[tuple[str, int]] = field(default_factory=list)
     tmux_calls: list[tuple[list[str], bool]] = field(default_factory=list)
     window_visibility_lag: dict[str, int] = field(default_factory=dict)
     pane_visibility_lag: dict[str, int] = field(default_factory=dict)
@@ -87,8 +89,10 @@ class _FakeTmuxBackend:
         record = {
             'id': self._alloc_window(),
             'name': window_name,
+            'width': 160,
             'panes': [pane_id],
         }
+        self.pane_widths[pane_id] = int(record['width'])
         self._session_windows(session_name).append(record)
         self.active_windows.setdefault(session_name, window_name)
         return record
@@ -107,8 +111,15 @@ class _FakeTmuxBackend:
             for record in windows:
                 panes = record['panes']
                 if parent_pane_id in panes:
+                    parent_width = int(self.pane_widths.get(parent_pane_id, record.get('width', 160)) or 160)
                     pane_id = self._alloc_pane()
                     panes.append(pane_id)
+                    if direction == 'right':
+                        new_width = max(1, min(parent_width - 1, round(parent_width * (percent / 100.0))))
+                        self.pane_widths[pane_id] = new_width
+                        self.pane_widths[parent_pane_id] = max(1, parent_width - new_width)
+                    else:
+                        self.pane_widths[pane_id] = parent_width
                     return pane_id
         raise RuntimeError(f'pane not found: {parent_pane_id}')
 
@@ -128,6 +139,13 @@ class _FakeTmuxBackend:
         for record in windows:
             if record['name'] == maybe_window or record['id'] == maybe_window:
                 return record
+        return None
+
+    def _pane_window_record(self, pane_id: str) -> tuple[str, dict[str, object]] | None:
+        for session_name, windows in self.sessions.items():
+            for record in windows:
+                if pane_id in record['panes']:
+                    return session_name, record
         return None
 
     def _window_visible(self, session_name: str, window_name: str) -> bool:
@@ -164,6 +182,24 @@ class _FakeTmuxBackend:
             if all(str(options.get(key, '') or '').strip() == value for key, value in expected.items()):
                 matches.append(pane_id)
         return matches
+
+    def _format_pane(self, session_name: str, record: dict[str, object], pane_id: str, fmt: str) -> str:
+        options = self.pane_options.get(pane_id, {})
+        active = self.active_windows.get(session_name) == record['name'] and record['panes'][0] == pane_id
+        values = {
+            'session_name': session_name,
+            'window_name': str(record['name']),
+            'window_width': str(int(record.get('width', 160) or 160)),
+            'pane_id': pane_id,
+            'pane_width': str(int(self.pane_widths.get(pane_id, record.get('width', 160)) or 160)),
+            'pane_active': '1' if active else '0',
+        }
+        rendered = fmt
+        for key, value in values.items():
+            rendered = rendered.replace(f'#{{{key}}}', value)
+        for key, value in options.items():
+            rendered = rendered.replace(f'#{{{key}}}', value)
+        return rendered
 
     def _tmux_run(
         self,
@@ -210,6 +246,14 @@ class _FakeTmuxBackend:
                 else:
                     rows.append(f"{record['id']}\t{record['name']}\t{active}")
             return SimpleNamespace(returncode=0, stdout='\n'.join(rows), stderr='')
+        if len(args) >= 4 and args[:2] == ['list-panes', '-a']:
+            fmt = args[args.index('-F') + 1] if '-F' in args else '#{pane_id}'
+            rows = []
+            for session_name, windows in self.sessions.items():
+                for record in windows:
+                    for pane_id in record['panes']:
+                        rows.append(self._format_pane(session_name, record, str(pane_id), fmt))
+            return SimpleNamespace(returncode=0, stdout='\n'.join(rows), stderr='')
         if len(args) >= 4 and args[:2] == ['list-panes', '-t']:
             window = self._window_record(args[2])
             panes = list(window['panes']) if window is not None and self._panes_visible(args[2], window) else []
@@ -250,6 +294,16 @@ class _FakeTmuxBackend:
         if len(args) >= 5 and args[:2] == ['set-option', '-t']:
             self.session_options.setdefault(args[2], {})[args[3]] = args[4]
             return SimpleNamespace(returncode=0, stdout='', stderr='')
+        if len(args) >= 5 and args[:2] == ['set-option', '-u']:
+            target = args[args.index('-t') + 1]
+            option = args[-1]
+            self.session_options.setdefault(target, {}).pop(option, None)
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        if len(args) >= 5 and args[:2] == ['show-option', '-qv']:
+            target = args[args.index('-t') + 1]
+            option = args[-1]
+            value = self.session_options.get(target, {}).get(option, '')
+            return SimpleNamespace(returncode=0 if value else 1, stdout=f'{value}\n' if value else '', stderr='')
         if len(args) >= 5 and args[:2] == ['set-window-option', '-t']:
             self.window_options.setdefault(args[2], {})[args[3]] = args[4]
             return SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -262,12 +316,20 @@ class _FakeTmuxBackend:
         if len(args) >= 5 and args[:3] == ['display-message', '-p', '-t']:
             pane_id = args[3]
             fmt = args[4]
-            if fmt == '#{@ccb_active_border_style}':
-                value = self.pane_options.get(pane_id, {}).get('@ccb_active_border_style', '')
-                return SimpleNamespace(returncode=0, stdout=f'{value}\n', stderr='')
-            if fmt == '#{@ccb_border_style}':
-                value = self.pane_options.get(pane_id, {}).get('@ccb_border_style', '')
-                return SimpleNamespace(returncode=0, stdout=f'{value}\n', stderr='')
+            pane_window = self._pane_window_record(pane_id)
+            if pane_window is not None:
+                session_name, record = pane_window
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f'{self._format_pane(session_name, record, pane_id, fmt)}\n',
+                    stderr='',
+                )
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        if len(args) >= 5 and args[:2] == ['resize-pane', '-t'] and '-x' in args:
+            pane_id = args[2]
+            width = int(args[args.index('-x') + 1])
+            self.resize_calls.append((pane_id, width))
+            self.pane_widths[pane_id] = width
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         if args[:1] == ['kill-server']:
             self.server_killed = True
@@ -501,6 +563,136 @@ bottom_height = 20
     assert backend.window_options[
         f'{layout.ccbd_tmux_session_name}:review'
     ]['pane-border-format'] != '#{pane_index}'
+
+
+def test_project_namespace_controller_refreshes_all_sidebar_widths(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-topology-sidebar-width-refresh'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+review = "agent2:codex"
+
+[ui.sidebar]
+mode = "every_window"
+width = "15%"
+bottom_height = 20
+""",
+        encoding='utf-8',
+    )
+    config = load_project_config(project_root).config
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-topology-sidebar-width-refresh',
+        clock=lambda: '2026-04-03T02:22:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+    topology_plan = build_namespace_topology_plan(
+        config,
+        ccbd_socket_path=str(layout.ccbd_socket_path),
+        project_root=str(project_root),
+    )
+
+    controller.ensure(topology_plan=topology_plan)
+    backend.pane_widths['%1'] = 41
+    backend.pane_widths['%3'] = 23
+    backend.resize_calls.clear()
+
+    controller.ensure(topology_plan=topology_plan)
+
+    assert backend.resize_calls == [('%1', 24), ('%3', 24)]
+    assert backend.pane_widths['%1'] == 24
+    assert backend.pane_widths['%3'] == 24
+
+
+def test_project_namespace_controller_preserves_manual_sidebar_width_override(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-topology-sidebar-width-override'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+review = "agent2:codex"
+
+[ui.sidebar]
+mode = "every_window"
+width = "15%"
+bottom_height = 20
+""",
+        encoding='utf-8',
+    )
+    config = load_project_config(project_root).config
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-topology-sidebar-width-override',
+        clock=lambda: '2026-04-03T02:22:30Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+    topology_plan = build_namespace_topology_plan(
+        config,
+        ccbd_socket_path=str(layout.ccbd_socket_path),
+        project_root=str(project_root),
+    )
+
+    controller.ensure(topology_plan=topology_plan)
+    backend.pane_widths['%1'] = 41
+    backend.pane_widths['%3'] = 23
+    backend.session_options.setdefault(layout.ccbd_tmux_session_name, {})['@ccb_sidebar_width_cells'] = '41'
+    backend.resize_calls.clear()
+
+    controller.ensure(topology_plan=topology_plan)
+
+    assert backend.resize_calls == [('%3', 41)]
+    assert backend.pane_widths['%1'] == 41
+    assert backend.pane_widths['%3'] == 41
+
+
+def test_project_namespace_sidebar_integer_width_uses_columns(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-topology-sidebar-integer-width'
+    (project_root / '.ccb').mkdir(parents=True)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        """version = 2
+entry_window = "main"
+
+[windows]
+main = "agent1:codex"
+
+[ui.sidebar]
+mode = "every_window"
+width = 30
+bottom_height = 20
+""",
+        encoding='utf-8',
+    )
+    config = load_project_config(project_root).config
+    layout = PathLayout(project_root)
+    backend = _FakeTmuxBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        'proj-topology-sidebar-integer-width',
+        clock=lambda: '2026-04-03T02:23:00Z',
+        backend_factory=lambda socket_path=None: backend,
+    )
+
+    controller.ensure(
+        topology_plan=build_namespace_topology_plan(
+            config,
+            ccbd_socket_path=str(layout.ccbd_socket_path),
+            project_root=str(project_root),
+        )
+    )
+
+    assert backend.split_calls[0] == ('%1', 'right', 81)
+    assert backend.pane_widths['%1'] == 30
 
 
 def test_project_namespace_controller_clears_topology_panes_when_reusing_without_topology(tmp_path: Path) -> None:

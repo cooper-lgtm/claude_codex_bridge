@@ -98,6 +98,7 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook_from_current_install_
 
     tmux_ui.apply_project_tmux_ui(
         tmux_socket_path='/tmp/ccb.sock',
+        ccbd_socket_path='/tmp/ccbd.sock',
         tmux_session_name='ccb-demo',
         backend=FakeBackend(),
     )
@@ -120,6 +121,48 @@ def test_apply_project_tmux_ui_sets_session_theme_and_hook_from_current_install_
         and 'ccb-border.sh' in call[4]
         for call in calls
     )
+    sidebar_mouse_bindings = [
+        call for call in calls if call[:4] == ['bind-key', '-T', 'root', 'MouseDown1Pane']
+    ]
+    assert len(sidebar_mouse_bindings) == 1
+    sidebar_mouse_binding = sidebar_mouse_bindings[0]
+    assert '#{@ccb_role},sidebar' in sidebar_mouse_binding[8]
+    assert '#{mouse_y}' in sidebar_mouse_binding[9]
+    assert 'start=$((width - 4))' in sidebar_mouse_binding[9]
+    assert 'send-keys -t "$pane" -l R' in sidebar_mouse_binding[9]
+    assert 'send-keys -t "$pane" -l Q' in sidebar_mouse_binding[9]
+    assert '__sidebar-click' in sidebar_mouse_binding[9]
+    assert '--socket /tmp/ccbd.sock' in sidebar_mouse_binding[9]
+    assert '--mouse-y "$y" --pane-top "$top" --pane-height "$height"' in sidebar_mouse_binding[9]
+    assert 'send-keys -M' not in sidebar_mouse_binding[9]
+    assert sidebar_mouse_binding[10] == 'select-pane -t = \\; send-keys -M'
+    sidebar_resize_bindings = [
+        call for call in calls if call[:4] == ['bind-key', '-T', 'root', 'MouseDrag1Border']
+    ]
+    assert len(sidebar_resize_bindings) == 1
+    sidebar_resize_binding = sidebar_resize_bindings[0]
+    assert sidebar_resize_binding == ['bind-key', '-T', 'root', 'MouseDrag1Border', 'resize-pane', '-M']
+    sidebar_resize_hooks = [
+        call for call in calls if call[:4] == ['set-hook', '-t', 'ccb-demo', 'after-resize-pane']
+    ]
+    assert len(sidebar_resize_hooks) == 1
+    sidebar_resize_hook = sidebar_resize_hooks[0][4]
+    assert '__sidebar-resize-sync' in sidebar_resize_hook
+    assert '@ccb_sidebar_sync_guard' in sidebar_resize_hook
+    assert '--tmux-socket /tmp/ccb.sock' in sidebar_resize_hook
+    assert '--session ccb-demo' in sidebar_resize_hook
+    assert '--source-pane "#{pane_id}"' in sidebar_resize_hook
+    assert '--project-id "#{@ccb_project_id}"' in sidebar_resize_hook
+    sidebar_window_resize_hooks = [
+        call for call in calls if call[:3] == ['set-hook', '-g', 'window-resized']
+    ]
+    assert len(sidebar_window_resize_hooks) == 1
+    sidebar_window_resize_hook = sidebar_window_resize_hooks[0][3]
+    assert '__sidebar-resize-sync' in sidebar_window_resize_hook
+    assert '@ccb_sidebar_sync_guard' in sidebar_window_resize_hook
+    assert 'current_session="#{session_name}"' in sidebar_window_resize_hook
+    assert '--source-window "#{window_id}"' in sidebar_window_resize_hook
+    assert '--from-stored-width' in sidebar_window_resize_hook
     assert ['set-option', '-p', '-t', '%9', 'pane-active-border-style', 'fg=#f7768e,bold'] in calls
 
 

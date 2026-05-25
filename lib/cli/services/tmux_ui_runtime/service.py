@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shlex
+from pathlib import Path
+
 from terminal_runtime.tmux_theme import render_tmux_session_theme
 
 from .helpers import build_tmux_backend, detect_ccb_version, script_path
@@ -10,9 +13,11 @@ def apply_project_tmux_ui(
     *,
     tmux_socket_path: str,
     tmux_session_name: str,
+    ccbd_socket_path: str | None = None,
     backend=None,
 ) -> None:
     socket_path = str(tmux_socket_path or '').strip()
+    ccbd_socket = str(ccbd_socket_path or _ccbd_socket_path_from_tmux_socket(socket_path)).strip()
     session_name = str(tmux_session_name or '').strip()
     if not socket_path or not session_name:
         return
@@ -31,6 +36,12 @@ def apply_project_tmux_ui(
     )
 
     _apply_session_theme(resolved_backend, session_name=session_name, rendered_theme=rendered_theme)
+    _apply_sidebar_mouse_controls(
+        resolved_backend,
+        tmux_socket_path=socket_path,
+        ccbd_socket_path=ccbd_socket,
+        session_name=session_name,
+    )
     _apply_pane_theme(
         resolved_backend,
         session_name=session_name,
@@ -43,6 +54,168 @@ def apply_project_tmux_ui(
 def _apply_session_theme(backend, *, session_name: str, rendered_theme) -> None:
     for option, value in rendered_theme.session_options.items():
         tmux_run(backend, ['set-option', '-t', session_name, option, value])
+
+
+def _apply_sidebar_mouse_controls(
+    backend,
+    *,
+    tmux_socket_path: str,
+    ccbd_socket_path: str,
+    session_name: str,
+) -> None:
+    tmux_socket = str(tmux_socket_path or '').strip()
+    ccbd_socket = str(ccbd_socket_path or '').strip()
+    if not tmux_socket or not ccbd_socket:
+        return
+    default_action = 'select-pane -t = \\; send-keys -M'
+    sidebar_match = (
+        '#{&&:#{==:#{session_name},'
+        + session_name
+        + '},#{==:#{@ccb_role},sidebar}}'
+    )
+    tmux_run(
+        backend,
+        [
+            'bind-key',
+            '-T',
+            'root',
+            'MouseDown1Pane',
+            'if-shell',
+            '-F',
+            '-t',
+            '=',
+            sidebar_match,
+            _sidebar_mouse_controls_shell(
+                tmux_socket,
+                ccbd_socket_path=ccbd_socket,
+                ccb_program=script_path('ccb') or 'ccb',
+            ),
+            default_action,
+        ],
+    )
+    tmux_run(
+        backend,
+        [
+            'bind-key',
+            '-T',
+            'root',
+            'MouseDrag1Border',
+            'resize-pane',
+            '-M',
+        ],
+    )
+    tmux_run(
+        backend,
+        [
+            'set-hook',
+            '-t',
+            session_name,
+            'after-resize-pane',
+            'run-shell -b '
+            + shlex.quote(
+                _sidebar_resize_sync_shell(
+                    tmux_socket,
+                    session_name=session_name,
+                    ccb_program=script_path('ccb') or 'ccb',
+                )
+            ),
+        ],
+    )
+    tmux_run(
+        backend,
+        [
+            'set-hook',
+            '-g',
+            'window-resized',
+            'run-shell -b '
+            + shlex.quote(
+                _sidebar_window_resize_sync_shell(
+                    tmux_socket,
+                    session_name=session_name,
+                    ccb_program=script_path('ccb') or 'ccb',
+                )
+            ),
+        ],
+    )
+
+
+def _sidebar_mouse_controls_shell(
+    tmux_socket_path: str,
+    *,
+    ccbd_socket_path: str,
+    ccb_program: str = 'ccb',
+) -> str:
+    quoted_socket = shlex.quote(tmux_socket_path)
+    quoted_ccbd_socket = shlex.quote(ccbd_socket_path)
+    quoted_ccb = shlex.quote(str(ccb_program or 'ccb'))
+    return (
+        "run-shell -b "
+        + shlex.quote(
+            "x='#{mouse_x}'; y='#{mouse_y}'; left='#{pane_left}'; top='#{pane_top}'; "
+            "width='#{pane_width}'; height='#{pane_height}'; pane='#{pane_id}'; "
+            "case \"$x:$y:$left:$top:$width:$height\" in ''|*[!0-9:]* ) exit 0 ;; esac; "
+            "[ \"$width\" -lt 5 ] && exit 0; "
+            "rel_x=$x; [ \"$x\" -ge \"$width\" ] && [ \"$x\" -ge \"$left\" ] && rel_x=$((x - left)); "
+            "rel_y=$y; [ \"$y\" -ge \"$height\" ] && [ \"$y\" -ge \"$top\" ] && rel_y=$((y - top)); "
+            "start=$((width - 4)); stop=$((start + 2)); "
+            f"if [ \"$rel_y\" -eq 0 ] && [ \"$rel_x\" -eq \"$start\" ]; then exec tmux -S {quoted_socket} send-keys -t \"$pane\" -l R; fi; "
+            f"if [ \"$rel_y\" -eq 0 ] && [ \"$rel_x\" -eq \"$stop\" ]; then exec tmux -S {quoted_socket} send-keys -t \"$pane\" -l Q; fi; "
+            f"if [ \"$rel_y\" -gt 0 ]; then exec {quoted_ccb} __sidebar-click --socket {quoted_ccbd_socket} "
+            "--mouse-y \"$y\" --pane-top \"$top\" --pane-height \"$height\"; fi"
+        )
+    )
+
+
+def _sidebar_resize_sync_shell(
+    tmux_socket_path: str,
+    *,
+    session_name: str,
+    ccb_program: str = 'ccb',
+) -> str:
+    quoted_socket = shlex.quote(tmux_socket_path)
+    quoted_session = shlex.quote(session_name)
+    quoted_ccb = shlex.quote(str(ccb_program or 'ccb'))
+    return (
+        'current_session="#{session_name}"; '
+        f'[ "$current_session" = {quoted_session} ] || exit 0; '
+        f'guard=$(tmux -S {quoted_socket} show-option -qv -t {quoted_session} @ccb_sidebar_sync_guard 2>/dev/null || true); '
+        '[ "$guard" = "1" ] && exit 0; '
+        f'exec {quoted_ccb} __sidebar-resize-sync '
+        f'--tmux-socket {quoted_socket} '
+        f'--session {quoted_session} '
+        '--source-pane "#{pane_id}" '
+        '--project-id "#{@ccb_project_id}"'
+    )
+
+
+def _sidebar_window_resize_sync_shell(
+    tmux_socket_path: str,
+    *,
+    session_name: str,
+    ccb_program: str = 'ccb',
+) -> str:
+    quoted_socket = shlex.quote(tmux_socket_path)
+    quoted_session = shlex.quote(session_name)
+    quoted_ccb = shlex.quote(str(ccb_program or 'ccb'))
+    return (
+        'current_session="#{session_name}"; '
+        f'[ "$current_session" = {quoted_session} ] || exit 0; '
+        f'guard=$(tmux -S {quoted_socket} show-option -qv -t {quoted_session} @ccb_sidebar_sync_guard 2>/dev/null || true); '
+        '[ "$guard" = "1" ] && exit 0; '
+        f'exec {quoted_ccb} __sidebar-resize-sync '
+        f'--tmux-socket {quoted_socket} '
+        f'--session {quoted_session} '
+        '--source-window "#{window_id}" '
+        '--project-id "#{@ccb_project_id}" '
+        '--from-stored-width'
+    )
+
+
+def _ccbd_socket_path_from_tmux_socket(tmux_socket_path: str) -> str:
+    path = Path(str(tmux_socket_path or '').strip())
+    if path.name == 'tmux.sock':
+        return str(path.with_name('ccbd.sock'))
+    return ''
 
 
 def _apply_pane_theme(backend, *, session_name: str, border_script: str | None, rendered_theme) -> None:

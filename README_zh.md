@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-7.0.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.0.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -74,10 +74,10 @@
 <details>
 <summary><b>最新版本亮点</b></summary>
 
-- **macOS release 验证已修复**：GitHub Tests 在 macOS release-install smoke 前先构建 sidebar helper，和正式 release 包安装形态一致。
-- **Claude Keychain 绑定可显式指定**：`CCB_KEYCHAIN_SERVICE_OVERRIDE` 可把 managed Claude 物化绑定到指定 macOS Keychain service。
-- **macOS 更新会保留 sidebar helper**：update staging 会跳过二进制文件的换行归一化，避免破坏 `bin/ccb-agent-sidebar`。
-- **Sidebar 本地重建失败更清楚**：当 helper 必须本机重建但缺少 Rust toolchain 时，安装脚本会明确报错。
+- **Sidebar 顶部控制更完整**：标题栏现在直接提供全量刷新、项目 pane 重启和退出动作。
+- **点击恢复焦点走 ccbd**：隐藏的 sidebar click 路径会把树节点点击还原为 window/agent focus，而不是依赖原始 tmux 鼠标透传。
+- **宽度同步在多 window 下更稳定**：拖动任意一个 sidebar 会同步所有 window，支持整数列宽，并且 `window-resized` 会按当前 CCB session 保存宽度重新应用。
+- **全量 pane 重启保持原位**：restart-all 通过 `project_restart_panes` 原地重启已配置 pane，不会重建整个 tmux session。
 
 完整历史见 [新版本记录](#新版本记录)。
 
@@ -330,6 +330,15 @@ ccb reinstall
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v7.0.7</b> - Sidebar Controls And Width Sync Release</summary>
+
+- 为 sidebar 标题栏增加全量刷新、原地重启项目 pane、退出等控制，并补齐对应的键盘与 tmux 鼠标路径。
+- 通过隐藏的 `ccb __sidebar-click` helper 把 sidebar 树点击恢复为经由 `ccbd` 的 window/agent focus。
+- 让 sidebar 宽度修改可跨 window 同步、支持整数列宽，并在 `window-resized` 时按保存宽度恢复，而不是把 tmux 临时压缩后的宽度当成新的用户设置。
+
+</details>
+
+<details>
 <summary><b>v7.0.6</b> - macOS Release Test Smoke Hotfix</summary>
 
 - 修复 macOS GitHub Tests 的 release-install smoke：在从源码 checkout 模拟 release install 前，先构建可在当前主机运行的 `bin/ccb-agent-sidebar`。

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v7.0.7 (2026-05-25)
+
+### Sidebar Controls And Width Sync Release
+
+- **Sidebar Top Controls Expanded**: the native sidebar now exposes full refresh, in-place project pane restart, and exit actions directly from the title bar, with matching keyboard and tmux mouse bindings.
+- **Pane Restart And Click Routing Added**: `project_restart_panes` and hidden `ccb __sidebar-click` paths now let sidebar actions refresh project panes and restore focus through `ccbd`.
+- **Sidebar Width Sync Hardened**: sidebar widths now accept integer column sizes, drag-resize uses `resize-pane -M`, `after-resize-pane` syncs widths across windows, and the global `window-resized` hook reapplies the stored width for the active CCB session instead of learning tmux's temporary compression.
+
 ## v7.0.6 (2026-05-24)
 
 ### macOS Release Test Smoke Hotfix

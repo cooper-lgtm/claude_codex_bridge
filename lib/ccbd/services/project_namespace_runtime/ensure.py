@@ -11,7 +11,7 @@ from .ensure_state import (
 from .materialize_topology import (
     existing_topology_agent_panes,
     materialize_topology,
-    refresh_topology_ui,
+    refresh_topology_ui_for_project,
     topology_active_panes,
     topology_recreate_reason,
 )
@@ -54,7 +54,12 @@ def ensure_project_namespace(
     if context.session_is_alive and context.current is not None:
         if topology_plan is not None:
             agent_panes = existing_topology_agent_panes(controller, context, topology_plan=topology_plan)
-            refresh_topology_ui(context)
+            refresh_topology_ui_for_project(
+                controller,
+                context,
+                topology_plan=topology_plan,
+                timeout_s=session_probe_timeout_s,
+            )
             setattr(controller, '_last_materialized_agent_panes', agent_panes)
             setattr(
                 controller,

@@ -14,6 +14,8 @@ from cli.management_runtime.startup_update import (
 from cli.phase2 import maybe_handle_phase2
 from cli.parser_runtime.constants import SUBCOMMANDS
 from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_command_help, print_kill_help, print_start_help
+from cli.sidebar_click import maybe_handle_sidebar_click_command
+from cli.sidebar_resize_sync import maybe_handle_sidebar_resize_sync_command
 
 
 def _should_print_version(tokens: list[str]) -> bool:
@@ -154,6 +156,12 @@ def run_cli_entrypoint(
     if _should_print_version(tokens):
         print(f"v{version}", file=stdout)
         return 0
+    sidebar_click_result = maybe_handle_sidebar_click_command(tokens, stderr=stderr)
+    if sidebar_click_result is not None:
+        return sidebar_click_result
+    sidebar_resize_sync_result = maybe_handle_sidebar_resize_sync_command(tokens, stderr=stderr)
+    if sidebar_resize_sync_result is not None:
+        return sidebar_resize_sync_result
     internal_result = maybe_handle_background_update_refresh_command(tokens, script_root=script_root)
     if internal_result is not None:
         return internal_result

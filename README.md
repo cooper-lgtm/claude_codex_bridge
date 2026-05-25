@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-7.0.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.0.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -74,10 +74,10 @@ Build project-local teams with roles, pane layout, provider state, worktree isol
 <details>
 <summary><b>Latest release highlights</b></summary>
 
-- **macOS release validation is fixed**: GitHub Tests now prebuild the sidebar helper before the macOS release-install smoke, matching packaged release installs.
-- **Claude keychain binding is explicit**: `CCB_KEYCHAIN_SERVICE_OVERRIDE` can bind managed Claude materialization to a specific macOS Keychain service.
-- **macOS updates preserve the sidebar helper**: update staging skips line-ending normalization for binary files so `bin/ccb-agent-sidebar` stays executable.
-- **Sidebar rebuild failures are clearer**: installers now require a Rust toolchain when a local helper rebuild is needed.
+- **Sidebar controls are richer**: the top bar now exposes full refresh, project pane restart, and exit actions directly from the sidebar UI.
+- **Clicks can restore focus through ccbd**: hidden sidebar click routing maps tree clicks back to project windows and agents instead of relying on raw tmux mouse passthrough.
+- **Width sync is stable across windows**: dragging one sidebar now syncs all windows, integer cell widths are supported, and resize events reapply the stored width for the current CCB session.
+- **Pane restart stays in place**: restart-all uses `project_restart_panes` so configured panes are respawned without rebuilding the whole tmux session.
 
 See [Release Notes](#release-notes) for the full history.
 
@@ -353,6 +353,15 @@ Thanks to the [Linux.do community](https://linux.do) for testing, feedback, and 
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v7.0.7</b> - Sidebar Controls And Width Sync Release</summary>
+
+- Adds full refresh, in-place project pane restart, and exit controls to the sidebar title bar, with matching keyboard and tmux mouse paths.
+- Routes sidebar tree clicks through hidden `ccb __sidebar-click` helpers so window and agent focus recovery goes back through `ccbd`.
+- Synchronizes sidebar width changes across windows, supports integer cell widths, and reapplies stored widths on `window-resized` instead of treating tmux's temporary squeeze as a new user preference.
+
+</details>
+
+<details>
 <summary><b>v7.0.6</b> - macOS Release Test Smoke Hotfix</summary>
 
 - Fixes the macOS GitHub Tests release-install smoke by prebuilding a host-runnable `bin/ccb-agent-sidebar` before simulating a release install from a source checkout.

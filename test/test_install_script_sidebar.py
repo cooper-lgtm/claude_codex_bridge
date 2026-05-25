@@ -26,6 +26,14 @@ def test_sidebar_bin_wrapper_is_source_install_fallback() -> None:
     assert 'while :; do sleep 3600; done' in text
 
 
+def test_rust_sidebar_does_not_enable_terminal_mouse_capture() -> None:
+    text = Path('tools/ccb-agent-sidebar/src/tui.rs').read_text(encoding='utf-8')
+
+    assert 'EnableMouseCapture' not in text
+    assert 'DisableMouseCapture' not in text
+    assert 'MouseEventKind' not in text
+
+
 def test_sidebar_build_script_copies_release_binary() -> None:
     text = Path('bin/build-ccb-agent-sidebar').read_text(encoding='utf-8')
 
@@ -369,7 +377,7 @@ def test_sidebar_release_workflow_publishes_linux_artifact() -> None:
 def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
 
-    assert 'default: "v7.0.6"' in text
+    assert 'default: "v7.0.7"' in text
     assert 'os: ubuntu-22.04' in text
     assert 'uses: dtolnay/rust-toolchain@stable' in text
     assert 'rustup target add x86_64-apple-darwin aarch64-apple-darwin' in text

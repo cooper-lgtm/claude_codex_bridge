@@ -28,7 +28,10 @@ impl Args {
                     project_root = Some(PathBuf::from(next_value(&mut iter, "--project-root")?));
                 }
                 "--pane-window" => {
-                    pane_window = Some(non_empty(next_value(&mut iter, "--pane-window")?, "--pane-window")?);
+                    pane_window = Some(non_empty(
+                        next_value(&mut iter, "--pane-window")?,
+                        "--pane-window",
+                    )?);
                 }
                 "-h" | "--help" => return Err(usage()),
                 other => return Err(format!("unknown argument: {other}\n{}", usage())),
@@ -48,7 +51,8 @@ impl Args {
 }
 
 fn next_value(iter: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    iter.next().ok_or_else(|| format!("missing value for {flag}"))
+    iter.next()
+        .ok_or_else(|| format!("missing value for {flag}"))
 }
 
 fn non_empty(value: String, flag: &str) -> Result<String, String> {
@@ -65,7 +69,8 @@ fn missing(flag: &str) -> String {
 }
 
 pub fn usage() -> String {
-    "usage: ccb-agent-sidebar --ccbd-socket <path> --project-root <path> --pane-window <name>".to_string()
+    "usage: ccb-agent-sidebar --ccbd-socket <path> --project-root <path> --pane-window <name>"
+        .to_string()
 }
 
 #[cfg(test)]
@@ -91,7 +96,8 @@ mod tests {
 
     #[test]
     fn rejects_missing_socket() {
-        let err = Args::parse_from(["--project-root", "/repo", "--pane-window", "main"]).unwrap_err();
+        let err =
+            Args::parse_from(["--project-root", "/repo", "--pane-window", "main"]).unwrap_err();
         assert!(err.contains("--ccbd-socket"));
     }
 }

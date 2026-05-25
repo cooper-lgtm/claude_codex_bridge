@@ -135,7 +135,11 @@ pub fn row_targets(view: &ProjectView) -> Vec<RowTarget> {
     let mut targets = Vec::new();
     for window in &view.windows {
         targets.push(RowTarget::Window(window.name.clone()));
-        for agent in view.agents.iter().filter(|agent| agent.window == window.name) {
+        for agent in view
+            .agents
+            .iter()
+            .filter(|agent| agent.window == window.name)
+        {
             targets.push(RowTarget::Agent(agent.name.clone()));
         }
     }
@@ -177,7 +181,16 @@ mod tests {
         assert_eq!(response.view.comms[0].status_label, "work");
         assert_eq!(response.view.comms[0].body_preview, "work");
         assert!(response.view.comms[0].recoverable);
-        assert_eq!(response.view.comms[0].block_reason.as_deref(), Some("pane_dead"));
-        assert_eq!(row_targets(&response.view), vec![RowTarget::Window("main".into()), RowTarget::Agent("agent1".into())]);
+        assert_eq!(
+            response.view.comms[0].block_reason.as_deref(),
+            Some("pane_dead")
+        );
+        assert_eq!(
+            row_targets(&response.view),
+            vec![
+                RowTarget::Window("main".into()),
+                RowTarget::Agent("agent1".into())
+            ]
+        );
     }
 }

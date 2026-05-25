@@ -88,6 +88,7 @@ def apply_namespace_identity(
     )
     apply_project_tmux_ui(
         tmux_socket_path=tmux_socket_path,
+        ccbd_socket_path=str(controller._layout.ccbd_socket_path),
         tmux_session_name=tmux_session_name,
         backend=backend,
     )

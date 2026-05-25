@@ -28,6 +28,23 @@ def refresh_topology_ui(context) -> None:
         tmux_session_name=context.desired_session_name,
         backend=context.backend,
     )
+    _sync_topology_sidebar_widths(None, context, topology_plan=getattr(context, 'topology_plan', None))
+
+
+def refresh_topology_ui_for_project(
+    controller,
+    context,
+    *,
+    topology_plan,
+    timeout_s: float | None = None,
+) -> None:
+    apply_project_tmux_ui(
+        tmux_socket_path=context.desired_socket_path,
+        ccbd_socket_path=str(controller._layout.ccbd_socket_path),
+        tmux_session_name=context.desired_session_name,
+        backend=context.backend,
+    )
+    _sync_topology_sidebar_widths(controller, context, topology_plan=topology_plan, timeout_s=timeout_s)
 
 
 def materialize_topology(
@@ -65,6 +82,7 @@ def materialize_topology(
     ensure_server_policy(context.backend, timeout_s=timeout_s)
     apply_project_tmux_ui(
         tmux_socket_path=context.desired_socket_path,
+        ccbd_socket_path=str(controller._layout.ccbd_socket_path),
         tmux_session_name=context.desired_session_name,
         backend=context.backend,
     )
@@ -101,7 +119,12 @@ def materialize_topology(
             )
         )
 
-    refresh_topology_ui(context)
+    refresh_topology_ui_for_project(
+        controller,
+        context,
+        topology_plan=topology_plan,
+        timeout_s=timeout_s,
+    )
     select_window(
         context.backend,
         target=session_window_target(context.desired_session_name, topology_plan.entry_window),
@@ -234,7 +257,10 @@ def _materialize_sidebar(
         context.backend,
         target=root_pane,
         direction='right',
-        percent=_user_pane_percent_for_sidebar(sidebar.width),
+        percent=_user_pane_percent_for_sidebar(
+            sidebar.width,
+            pane_width=_pane_width_cells(context.backend, root_pane),
+        ),
         project_root=controller._layout.project_root,
         timeout_s=timeout_s,
     )
@@ -358,6 +384,200 @@ def _find_window(context, window_name: str):
         return None
 
 
+def _sync_topology_sidebar_widths(
+    controller,
+    context,
+    *,
+    topology_plan,
+    timeout_s: float | None = None,
+) -> None:
+    if topology_plan is None or not bool(getattr(topology_plan, 'sidebar_enabled', False)):
+        return
+    width_by_window = {
+        str(window.name): getattr(window.sidebar, 'width', '15%')
+        for window in tuple(getattr(topology_plan, 'windows', ()) or ())
+        if getattr(window, 'sidebar', None) is not None
+    }
+    if not width_by_window:
+        return
+    project_id = (
+        str(getattr(controller, '_project_id', '') or '').strip()
+        if controller is not None
+        else ''
+    )
+    width_override = _session_sidebar_width_override(context.backend, context.desired_session_name)
+    _set_session_sidebar_sync_guard(context.backend, context.desired_session_name, enabled=True)
+    try:
+        for record in _list_sidebar_geometry_records(
+            context.backend,
+            session_name=context.desired_session_name,
+            project_id=project_id,
+        ):
+            configured_width = width_override or width_by_window.get(record['sidebar_instance'])
+            if configured_width is None:
+                continue
+            window_width = _positive_int(record.get('window_width'))
+            if window_width <= 0:
+                continue
+            target_width = _sidebar_width_cells(configured_width, window_width)
+            if target_width <= 0 or target_width == _positive_int(record.get('pane_width')):
+                continue
+            _resize_pane_width(context.backend, record['pane_id'], target_width, timeout_s=timeout_s)
+    finally:
+        _set_session_sidebar_sync_guard(context.backend, context.desired_session_name, enabled=False)
+
+
+def _list_sidebar_geometry_records(
+    backend,
+    *,
+    session_name: str,
+    project_id: str = '',
+) -> list[dict[str, str]]:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return []
+    fmt = '\t'.join(
+        [
+            '#{session_name}',
+            '#{pane_id}',
+            '#{window_width}',
+            '#{pane_width}',
+            '#{@ccb_project_id}',
+            '#{@ccb_role}',
+            '#{@ccb_sidebar_instance}',
+            '#{@ccb_managed_by}',
+        ]
+    )
+    try:
+        cp = runner(['list-panes', '-a', '-F', fmt], capture=True, check=False, timeout=0.5)
+    except Exception:
+        return []
+    if getattr(cp, 'returncode', 1) != 0:
+        return []
+    records: list[dict[str, str]] = []
+    for line in (getattr(cp, 'stdout', '') or '').splitlines():
+        parts = [part.strip() for part in line.split('\t')]
+        if len(parts) != 8:
+            continue
+        (
+            pane_session,
+            pane_id,
+            window_width,
+            pane_width,
+            pane_project_id,
+            role,
+            sidebar_instance,
+            managed_by,
+        ) = parts
+        if pane_session != session_name or role != 'sidebar' or managed_by != 'ccbd':
+            continue
+        if project_id and pane_project_id != project_id:
+            continue
+        if not pane_id.startswith('%') or not sidebar_instance:
+            continue
+        records.append(
+            {
+                'pane_id': pane_id,
+                'window_width': window_width,
+                'pane_width': pane_width,
+                'sidebar_instance': sidebar_instance,
+            }
+        )
+    return records
+
+
+def _resize_pane_width(backend, pane_id: str, width: int, *, timeout_s: float | None = None) -> None:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return
+    try:
+        runner(
+            ['resize-pane', '-t', pane_id, '-x', str(max(1, int(width)))],
+            check=False,
+            capture=True,
+            timeout=timeout_s,
+        )
+    except Exception:
+        return
+
+
+def _sidebar_width_cells(width: object, window_width: int) -> int:
+    usable_width = max(1, int(window_width or 0))
+    target = _sidebar_width_target_cells(width, usable_width)
+    min_user_width = 10 if usable_width > 20 else 1
+    max_width = max(1, usable_width - min_user_width)
+    return max(1, min(max_width, int(target)))
+
+
+def _sidebar_width_target_cells(width: object, window_width: int) -> int:
+    text = str(width or '').strip()
+    if text.endswith('%'):
+        return round(max(1, int(window_width or 0)) * (_sidebar_percent(text) / 100.0))
+    try:
+        return int(text)
+    except Exception:
+        return round(max(1, int(window_width or 0)) * 0.15)
+
+
+def _pane_width_cells(backend, pane_id: str) -> int:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return 0
+    try:
+        cp = runner(
+            ['display-message', '-p', '-t', pane_id, '#{pane_width}'],
+            capture=True,
+            check=False,
+            timeout=0.5,
+        )
+    except Exception:
+        return 0
+    if getattr(cp, 'returncode', 1) != 0:
+        return 0
+    return _positive_int(((getattr(cp, 'stdout', '') or '').splitlines() or [''])[0])
+
+
+def _session_sidebar_width_override(backend, session_name: str) -> int:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return 0
+    try:
+        cp = runner(
+            ['show-option', '-qv', '-t', session_name, '@ccb_sidebar_width_cells'],
+            capture=True,
+            check=False,
+            timeout=0.5,
+        )
+    except Exception:
+        return 0
+    if getattr(cp, 'returncode', 1) != 0:
+        return 0
+    return _positive_int(((getattr(cp, 'stdout', '') or '').splitlines() or [''])[0])
+
+
+def _set_session_sidebar_sync_guard(backend, session_name: str, *, enabled: bool) -> None:
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return
+    args = (
+        ['set-option', '-t', session_name, '@ccb_sidebar_sync_guard', '1']
+        if enabled
+        else ['set-option', '-u', '-t', session_name, '@ccb_sidebar_sync_guard']
+    )
+    try:
+        runner(args, capture=True, check=False, timeout=0.5)
+    except Exception:
+        return
+
+
+def _positive_int(value: object) -> int:
+    try:
+        parsed = int(str(value or '').strip())
+    except Exception:
+        return 0
+    return max(0, parsed)
+
+
 def _pane_option(backend, pane_id: str, option_name: str) -> str:
     runner = getattr(backend, '_tmux_run', None)
     if not callable(runner):
@@ -418,7 +638,11 @@ def _sidebar_percent(width: object) -> int:
     return max(1, min(90, value))
 
 
-def _user_pane_percent_for_sidebar(width: object) -> int:
+def _user_pane_percent_for_sidebar(width: object, pane_width: int = 0) -> int:
+    if pane_width > 0:
+        sidebar_cells = _sidebar_width_cells(width, pane_width)
+        user_cells = max(1, int(pane_width) - sidebar_cells)
+        return max(1, min(99, round((user_cells * 100) / int(pane_width))))
     return max(10, min(99, 100 - _sidebar_percent(width)))
 
 
@@ -436,6 +660,7 @@ __all__ = [
     'existing_topology_agent_panes',
     'materialize_topology',
     'refresh_topology_ui',
+    'refresh_topology_ui_for_project',
     'topology_active_panes',
     'topology_recreate_reason',
 ]

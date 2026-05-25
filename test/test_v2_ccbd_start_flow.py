@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from agents.models import AgentRuntime, AgentState
 from ccbd.app import CcbdApp
+import ccbd.handlers.project_restart as project_restart
+from ccbd.handlers.project_restart import RESTART_PANES_REASON, build_project_restart_panes_handler
 from ccbd.lifecycle_report_store import CcbdStartupReportStore
 from ccbd.services.lifecycle import build_lifecycle
 from ccbd.start_flow import StartFlowSummary
@@ -86,6 +88,34 @@ def test_tmux_layout_for_start_uses_namespace_agent_panes_when_provided() -> Non
     assert calls['ui_active'] is True
     assert layout.cmd_pane_id is None
     assert layout.agent_panes == {'agent1': '%1', 'agent2': '%2', 'agent3': '%3'}
+
+
+def test_project_restart_panes_handler_schedules_in_place_pane_restart(monkeypatch) -> None:
+    restarts: list[tuple[object, tuple[str, ...]]] = []
+
+    app = SimpleNamespace(
+        config=SimpleNamespace(agents={'agent1': object(), 'agent2': object()}),
+        start_maintenance_lock=threading.Lock(),
+    )
+    monkeypatch.setattr(
+        project_restart,
+        'restart_project_agent_panes_in_place',
+        lambda app_arg, *, agent_names: restarts.append((app_arg, agent_names)),
+    )
+    handler = build_project_restart_panes_handler(app)
+
+    payload, after_response = handler({})
+
+    assert payload == {
+        'status': 'scheduled',
+        'agent_names': ['agent1', 'agent2'],
+        'restart_mode': 'in_place',
+        'recreate_reason': RESTART_PANES_REASON,
+    }
+
+    after_response()
+
+    assert restarts == [(app, ('agent1', 'agent2'))]
 
 
 def test_ccbd_start_flow_writes_runtime_authority_via_rpc(tmp_path: Path, monkeypatch) -> None:

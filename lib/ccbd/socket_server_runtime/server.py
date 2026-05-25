@@ -23,6 +23,7 @@ class CcbdSocketServer:
         'resubmit',
         'retry',
         'comms_recover',
+        'project_restart_panes',
         'stop-all',
     })
 

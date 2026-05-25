@@ -9,6 +9,7 @@ _STOPPING_GUARDED_OPS = frozenset({
     'ack',
     'resubmit',
     'retry',
+    'project_restart_panes',
 })
 
 

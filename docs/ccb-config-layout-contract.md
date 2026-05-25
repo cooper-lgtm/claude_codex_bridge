@@ -158,7 +158,8 @@ Contract:
 - Each configured agent must appear in exactly one window layout.
 - Windows topology must not be combined with legacy `default_agents`, `layout`, or `cmd_enabled` fields.
 - `entry_window` is optional and defaults to the first declared window.
-- `[ui.sidebar]` is valid only with windows topology. Defaults are `mode = "every_window"`, `width = "15%"`, and `bottom_height = 20`.
+- `[ui.sidebar]` is valid only with windows topology. Defaults are `mode = "every_window"`, `width = "15%"`, and `bottom_height = 20`; `width` accepts either a positive integer column count or a percentage string.
+- In `mode = "every_window"`, CCB treats `width` as a project-wide sidebar width. Topology refreshes must resize every managed sidebar pane to the same configured share of its tmux window so page/window switches do not leave sidebars at different widths. If the user drags a sidebar border, CCB stores that runtime column width in the project tmux session and applies it to every managed sidebar window until the session is recreated. If tmux later resizes a window because a terminal client attaches or changes size, CCB reapplies the stored runtime width instead of treating the auto-resized pane width as a new user preference.
 - `[agents.<name>]` tables may provide agent overrides; if they repeat `provider`, it must match the provider declared in `[windows]`.
 
 ### 4.2 Agent API Shortcut

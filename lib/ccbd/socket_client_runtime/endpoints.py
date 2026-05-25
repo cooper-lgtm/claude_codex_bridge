@@ -178,6 +178,10 @@ def _payload_project_view_dismiss_comms(comms_id: str) -> dict:
     return {'id': comms_id}
 
 
+def _payload_project_restart_panes() -> dict:
+    return {}
+
+
 def _payload_project_focus_window(window: str, *, namespace_epoch: int | None = None) -> dict:
     payload = {'window': window}
     if namespace_epoch is not None:
@@ -213,6 +217,7 @@ client_endpoints = {
     'stop_all': ('stop-all', _payload_stop_all),
     'project_view': ('project_view', _payload_project_view),
     'project_view_dismiss_comms': ('project_view_dismiss_comms', _payload_project_view_dismiss_comms),
+    'project_restart_panes': ('project_restart_panes', _payload_project_restart_panes),
     'project_focus_window': ('project_focus_window', _payload_project_focus_window),
     'project_focus_agent': ('project_focus_agent', _payload_project_focus_agent),
 }
